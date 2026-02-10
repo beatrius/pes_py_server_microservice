@@ -1,4 +1,5 @@
-from pyembroidery import *
+from pyembroidery import EmbPattern, EmbThread, STITCH, JUMP, COLOR_BREAK, END
+from pyembroidery import write as write_embroidery
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
@@ -10,7 +11,6 @@ from typing import Dict, Any
 from svgpathtools import parse_path
 from xml.etree import ElementTree as ET
 import re
-import pyembroidery
 
 app = FastAPI()
 
@@ -89,18 +89,18 @@ def get_color(elem):
         r = int(hex_val[0:2], 16)
         g = int(hex_val[2:4], 16)
         b = int(hex_val[4:6], 16)
-        t = pyembroidery.EmbThread()
+        t = EmbThread()
         t.color = (r, g, b)
         return t
 
-    t = pyembroidery.EmbThread()
+    t = EmbThread()
     t.color = (0, 0, 0)
     return t
 
 
 @app.post("/convert")
 async def convert_svg(request: ConvertRequest):
-    print(">>> V4 using pyembroidery.EmbPattern + pyembroidery.write <<<")
+    print(">>> V5 using explicit imports: EmbPattern, EmbThread, write_embroidery <<<")
     try:
         svg_content = request.svg
         options = request.options
@@ -108,7 +108,7 @@ async def convert_svg(request: ConvertRequest):
         root = ET.fromstring(svg_content)
         ns = {"svg": "http://www.w3.org/2000/svg"}
 
-        pattern = pyembroidery.EmbPattern()
+        pattern = EmbPattern()
 
         width_mm = float(options.get("width_mm", 100))
         height_mm = float(options.get("height_mm", 100))
@@ -152,14 +152,14 @@ async def convert_svg(request: ConvertRequest):
                     y = (point.imag - vb[1]) * scale_y
 
                     if first:
-                        pattern.add_command(pyembroidery.JUMP, x, y)
+                        pattern.add_command(JUMP, x, y)
                         first = False
                     else:
-                        pattern.add_command(pyembroidery.STITCH, x, y)
+                        pattern.add_command(STITCH, x, y)
 
-            pattern.add_command(pyembroidery.COLOR_BREAK)
+            pattern.add_command(COLOR_BREAK)
 
-        pattern.add_command(pyembroidery.END)
+        pattern.add_command(END)
 
         if not pattern.stitches:
             raise HTTPException(
@@ -170,7 +170,7 @@ async def convert_svg(request: ConvertRequest):
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pes")
         os.close(tmp_fd)
         try:
-            pyembroidery.write(pattern, tmp_path)
+            write_embroidery(pattern, tmp_path)
             with open(tmp_path, "rb") as f:
                 pes_bytes = f.read()
         finally:
@@ -194,4 +194,4 @@ async def convert_svg(request: ConvertRequest):
 
 @app.get("/")
 async def read_root():
-    return {"message": "Servicio de conversión V4. Endpoints: /analyze, /convert"}
+    return {"message": "Servicio de conversión V5. Endpoints: /analyze, /convert"}
