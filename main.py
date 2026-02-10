@@ -8,7 +8,7 @@ app = FastAPI()
 
 # Configuración de CORS (ajusta los orígenes según sea necesario)
 origins = [
-    "https://tu-app-lovable.lovable.app", # Reemplaza con el dominio de tu app Lovable
+    "https://stitchcucumber.lovable.app/", # Reemplaza con el dominio de tu app Lovable
     "http://localhost:3000", # Para desarrollo local de Lovable
     "*", # Permite todos los orígenes durante el desarrollo, ¡ajusta para producción!
 ]
