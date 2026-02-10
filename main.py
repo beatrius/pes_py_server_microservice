@@ -2,7 +2,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import pyembroidery
 import os
 import tempfile
 from typing import Dict, Any
@@ -10,9 +9,18 @@ from svgpathtools import parse_path
 from xml.etree import ElementTree as ET
 import re
 
+from pyembroidery import (
+    EmbPattern,
+    EmbThread,
+    write_pes,
+    JUMP,
+    STITCH,
+    COLOR_BREAK,
+    END,
+)
+
 app = FastAPI()
 
-# Configuración de CORS
 origins = [
     "https://stitchcucumber.lovable.app",
     "http://localhost:3000",
@@ -61,7 +69,6 @@ async def analyze_svg(request: AnalyzeRequest):
         ]
     }
 
-# Helper function to extract color from SVG element
 def get_color(elem):
     fill = elem.get("fill", "") or ""
     stroke = elem.get("stroke", "") or ""
@@ -85,11 +92,11 @@ def get_color(elem):
         r = int(hex_val[0:2], 16)
         g = int(hex_val[2:4], 16)
         b = int(hex_val[4:6], 16)
-        t = pyembroidery.EmbThread()
+        t = EmbThread()
         t.color = (r, g, b)
         return t
 
-    t = pyembroidery.EmbThread()
+    t = EmbThread()
     t.color = (0, 0, 0)
     return t
 
@@ -102,7 +109,7 @@ async def convert_svg(request: ConvertRequest):
         root = ET.fromstring(svg_content)
         ns = {"svg": "http://www.w3.org/2000/svg"}
 
-        pattern = pyembroidery.EmbPattern()
+        pattern = EmbPattern()
 
         width_mm = float(options.get("width_mm", 100))
         height_mm = float(options.get("height_mm", 100))
@@ -111,13 +118,13 @@ async def convert_svg(request: ConvertRequest):
         vb = [float(x) for x in viewbox.split()]
         vb_w, vb_h = vb[2] - vb[0], vb[3] - vb[1]
 
-        scale_x = (width_mm * 10) / vb_w  # mm to 0.1mm units
+        scale_x = (width_mm * 10) / vb_w
         scale_y = (height_mm * 10) / vb_h
 
         paths = root.findall(".//svg:path", ns) + root.findall(".//path")
 
         stitch_density = float(options.get("stitch_density", 2.5))
-        density_units = stitch_density * 10  # to 0.1mm
+        density_units = stitch_density * 10
 
         for path_elem in paths:
             d = path_elem.get("d", "")
@@ -146,14 +153,14 @@ async def convert_svg(request: ConvertRequest):
                     y = (point.imag - vb[1]) * scale_y
 
                     if first:
-                        pattern.add_command(pyembroidery.JUMP, x, y)
+                        pattern.add_command(JUMP, x, y)
                         first = False
                     else:
-                        pattern.add_command(pyembroidery.STITCH, x, y)
+                        pattern.add_command(STITCH, x, y)
 
-            pattern.add_command(pyembroidery.COLOR_BREAK)
+            pattern.add_command(COLOR_BREAK)
 
-        pattern.add_command(pyembroidery.END)
+        pattern.add_command(END)
 
         if not pattern.stitches:
             raise HTTPException(
@@ -161,12 +168,10 @@ async def convert_svg(request: ConvertRequest):
                 detail="El SVG no contiene trazados válidos para bordar.",
             )
 
-        # pyembroidery.write() does not accept BytesIO, only file paths.
-        # Write to a temporary file, then read the bytes back.
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pes")
         os.close(tmp_fd)
         try:
-            pyembroidery.write_pes(pattern, tmp_path)
+            write_pes(pattern, tmp_path)
             with open(tmp_path, "rb") as f:
                 pes_bytes = f.read()
         finally:
