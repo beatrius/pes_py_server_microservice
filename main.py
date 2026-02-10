@@ -1,3 +1,6 @@
+import pyembroidery
+from pyembroidery import EmbPattern, EmbThread, JUMP, STITCH, COLOR_BREAK, END
+
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,16 +11,6 @@ from typing import Dict, Any
 from svgpathtools import parse_path
 from xml.etree import ElementTree as ET
 import re
-
-from pyembroidery import (
-    EmbPattern,
-    EmbThread,
-    write_pes,
-    JUMP,
-    STITCH,
-    COLOR_BREAK,
-    END,
-)
 
 app = FastAPI()
 
@@ -34,12 +27,15 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+
 class AnalyzeRequest(BaseModel):
     svg: str
+
 
 class ConvertRequest(BaseModel):
     svg: str
     options: Dict[str, Any]
+
 
 @app.post("/analyze")
 async def analyze_svg(request: AnalyzeRequest):
@@ -50,24 +46,25 @@ async def analyze_svg(request: AnalyzeRequest):
                 "label": "Densidad de Puntada (mm)",
                 "type": "number",
                 "default": 2.5,
-                "description": "Distancia entre puntadas a lo largo de un trazo. Menor valor = más denso."
+                "description": "Distancia entre puntadas a lo largo de un trazo. Menor valor = más denso.",
             },
             {
                 "key": "width_mm",
                 "label": "Ancho del Diseño (mm)",
                 "type": "number",
                 "default": 100,
-                "description": "Ancho final del bordado en milímetros."
+                "description": "Ancho final del bordado en milímetros.",
             },
             {
                 "key": "height_mm",
                 "label": "Alto del Diseño (mm)",
                 "type": "number",
                 "default": 100,
-                "description": "Alto final del bordado en milímetros."
-            }
+                "description": "Alto final del bordado en milímetros.",
+            },
         ]
     }
+
 
 def get_color(elem):
     fill = elem.get("fill", "") or ""
@@ -100,9 +97,10 @@ def get_color(elem):
     t.color = (0, 0, 0)
     return t
 
+
 @app.post("/convert")
 async def convert_svg(request: ConvertRequest):
-    print(">>> USING DIRECT IMPORTS V2 <<<")
+    print(">>> USING pyembroidery.write() V3 <<<")
     try:
         svg_content = request.svg
         options = request.options
@@ -172,7 +170,9 @@ async def convert_svg(request: ConvertRequest):
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pes")
         os.close(tmp_fd)
         try:
-            write_pes(pattern, tmp_path)
+            # USE pyembroidery.write() — dispatches by file extension
+            # This avoids the 'module' object is not callable error
+            pyembroidery.write(pattern, tmp_path)
             with open(tmp_path, "rb") as f:
                 pes_bytes = f.read()
         finally:
@@ -187,13 +187,15 @@ async def convert_svg(request: ConvertRequest):
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Exception detail: {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=500,
             detail=f"Error al procesar el archivo: {str(e)}",
         )
 
+
 @app.get("/")
 async def read_root():
     return {
-        "message": "Servicio de conversión de bordados para Lovable. Endpoints: /analyze, /convert"
+        "message": "Servicio de conversión de bordados. Endpoints: /analyze, /convert"
     }
