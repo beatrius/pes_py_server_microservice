@@ -85,9 +85,13 @@ def get_color(elem):
         r = int(hex_val[0:2], 16)
         g = int(hex_val[2:4], 16)
         b = int(hex_val[4:6], 16)
-        return pyembroidery.EmbThread({"color": (r, g, b)})
+        t = pyembroidery.EmbThread()
+        t.color = (r, g, b)
+        return t
 
-    return pyembroidery.EmbThread({"color": (0, 0, 0)})
+    t = pyembroidery.EmbThread()
+    t.color = (0, 0, 0)
+    return t
 
 @app.post("/convert")
 async def convert_svg(request: ConvertRequest):
