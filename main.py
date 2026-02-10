@@ -1,16 +1,17 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pyembroidery
 import io
+from typing import Optional
 
 app = FastAPI()
 
 # Configuración de CORS (ajusta los orígenes según sea necesario)
 origins = [
-    "https://stitchcucumber.lovable.app/", # Reemplaza con el dominio de tu app Lovable
-    "http://localhost:3000", # Para desarrollo local de Lovable
-    "*", # Permite todos los orígenes durante el desarrollo, ¡ajusta para producción!
+    "https://stitchcucumber.lovable.app",  # Dominio de tu app Lovable en producción
+    "http://localhost:3000",  # Para desarrollo local de Lovable
+    "*",  # Permite todos los orígenes durante el desarrollo, ¡elimina esto en producción!
 ]
 
 app.add_middleware(
@@ -21,52 +22,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.post("/process-svg/")
-async def process_svg_file(file: UploadFile = File(...)):
+@app.post("/convert-svg-to-pes/")
+async def convert_svg_to_pes(
+    file: UploadFile = File(...),
+    max_stitch_length: Optional[float] = Form(30.0, description="Longitud máxima de puntada (en 1/10 mm)"),
+    max_jump_length: Optional[float] = Form(121.0, description="Longitud máxima de salto (en 1/10 mm)"),
+    tie_on: Optional[bool] = Form(True, description="Activar nudo de inicio (tie-on)"),
+    tie_off: Optional[bool] = Form(True, description="Activar nudo de fin (tie-off)"),
+    long_stitch_contingency: Optional[str] = Form("SEW_TO", description="Qué hacer con puntadas largas: SEW_TO o JUMP_NEEDLE")
+):
     if not file.filename.lower().endswith(".svg"):
-        raise HTTPException(status_code=400, detail="Invalid file type. Only .svg files are accepted.")
+        raise HTTPException(status_code=400, detail="Tipo de archivo inválido. Solo se aceptan archivos .svg.")
 
     try:
         contents = await file.read()
-        # pyembroidery.read_svg() espera un archivo-like object o path
-        f = io.BytesIO(contents)
+        svg_stream = io.BytesIO(contents)
         
         # Leer el SVG y convertirlo a un patrón de bordado
-        # pyembroidery puede leer SVG y generar un patrón de puntadas
-        pattern = pyembroidery.read_svg(f)
+        pattern = pyembroidery.read_svg(svg_stream)
 
-        # Si el SVG no contiene información de bordado directamente, pyembroidery intentará vectorizarlo
-        # y generar puntadas. Esto puede ser complejo y requerir configuración adicional
-        # o un SVG específicamente formateado para bordado.
-        
-        # Para este ejemplo, asumimos que pyembroidery puede procesar el SVG en un patrón.
-        # Si el SVG es puramente gráfico sin instrucciones de bordado, pyembroidery puede
-        # generar un patrón vacío o un error si no puede interpretarlo como bordado.
+        if not pattern.stitches:
+            raise HTTPException(status_code=422, detail="El SVG no pudo ser convertido a un patrón de bordado. Asegúrate de que contenga rutas vectoriales válidas.")
 
-        if not pattern.stitches: # Si no se generaron puntadas, puede que el SVG no fuera interpretable como bordado
-             raise HTTPException(status_code=422, detail="SVG could not be converted to an embroidery pattern. Ensure it contains valid vector paths for embroidery.")
+        # Aplicar configuraciones de bordado desde los parámetros
+        settings = {
+            "max_stitch_length": max_stitch_length,
+            "max_jump_length": max_jump_length,
+            "tie_on": pyembroidery.CONTINGENCY_TIE_ON_THREE_SMALL if tie_on else pyembroidery.CONTINGENCY_TIE_ON_NONE,
+            "tie_off": pyembroidery.CONTINGENCY_TIE_OFF_THREE_SMALL if tie_off else pyembroidery.CONTINGENCY_TIE_OFF_NONE,
+            "long_stitch_contingency": pyembroidery.CONTINGENCY_LONG_STITCH_SEW_TO if long_stitch_contingency == "SEW_TO" else pyembroidery.CONTINGENCY_LONG_STITCH_JUMP_NEEDLE
+        }
 
-        # Extraer información básica del patrón de bordado resultante
-        stitch_count = len(pattern.stitches)
-        color_changes = len(pattern.thread_set)
-        
-        # Calcular el tamaño del diseño. pattern.bounds() devuelve (min_x, min_y, max_x, max_y)
-        min_x, min_y, max_x, max_y = pattern.bounds()
-        design_width = max_x - min_x
-        design_height = max_y - min_y
+        # Normalizar el patrón con las configuraciones
+        normalized_pattern = pattern.get_normalized_pattern(settings)
 
-        return JSONResponse({
-            "filename": file.filename,
-            "stitch_count": stitch_count,
-            "color_changes": color_changes,
-            "design_width_mm": design_width, # pyembroidery trabaja en mm por defecto
-            "design_height_mm": design_height,
-            "message": "SVG file processed and converted to embroidery pattern successfully."
-        })
+        # Crear un archivo PES en memoria
+        pes_stream = io.BytesIO()
+        pyembroidery.write_pes(normalized_pattern, pes_stream)
+        pes_stream.seek(0)
+
+        # Devolver el archivo PES para descarga
+        return StreamingResponse(
+            pes_stream,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename={file.filename.rsplit('.', 1)[0]}.pes"}
+        )
+
     except Exception as e:
-        # Captura errores específicos de pyembroidery o de procesamiento de SVG
-        raise HTTPException(status_code=500, detail=f"Error processing SVG file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error procesando el archivo SVG: {str(e)}")
 
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to the pyembroidery SVG service!"}
+    return {"message": "Bienvenido al servicio de conversión de SVG a PES con pyembroidery."}
