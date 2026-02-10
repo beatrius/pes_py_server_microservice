@@ -1,182 +1,200 @@
-import traceback
-import tempfile
-import os
-from io import BytesIO
-from xml.etree import ElementTree as ET
-
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
-
 import pyembroidery
+import xml.etree.ElementTree as ET
+import tempfile
+import os
+import re
+import traceback
 
-print(">>> V7 minimal pyembroidery - write_pes direct <<<")
+print(">>> V8 - add_thread dict, no EmbThread <<<")
 
 app = FastAPI()
 
-
 class AnalyzeRequest(BaseModel):
     svg: str
-
 
 class ConvertRequest(BaseModel):
     svg: str
     options: Optional[Dict[str, Any]] = None
 
+def parse_color(color_str: str) -> int:
+    """Convert CSS color to int 0xRRGGBB."""
+    if not color_str:
+        return 0x000000
+    color_str = color_str.strip().lower()
+    if color_str.startswith('#'):
+        hex_val = color_str[1:]
+        if len(hex_val) == 3:
+            hex_val = ''.join(c * 2 for c in hex_val)
+        try:
+            return int(hex_val[:6], 16)
+        except ValueError:
+            return 0x000000
+    color_map = {
+        'black': 0x000000, 'white': 0xFFFFFF, 'red': 0xFF0000,
+        'green': 0x008000, 'blue': 0x0000FF, 'yellow': 0xFFFF00,
+        'none': 0x000000
+    }
+    return color_map.get(color_str, 0x000000)
+
+def extract_paths_from_svg(svg_content: str):
+    """Extract path data and colors from SVG."""
+    paths = []
+    try:
+        root = ET.fromstring(svg_content)
+    except ET.ParseError:
+        return paths
+
+    ns = {'svg': 'http://www.w3.org/2000/svg'}
+    
+    for elem in root.iter():
+        tag = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+        
+        if tag == 'path':
+            d = elem.get('d', '')
+            stroke = elem.get('stroke', '')
+            fill = elem.get('fill', '')
+            style = elem.get('style', '')
+            
+            if style:
+                s_match = re.search(r'stroke:\s*([^;]+)', style)
+                f_match = re.search(r'fill:\s*([^;]+)', style)
+                if s_match:
+                    stroke = s_match.group(1)
+                if f_match:
+                    fill = f_match.group(1)
+            
+            color = stroke if stroke and stroke != 'none' else fill
+            if d:
+                paths.append({'d': d, 'color': color or '#000000'})
+        
+        elif tag in ('rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon'):
+            stroke = elem.get('stroke', '')
+            fill = elem.get('fill', '')
+            color = stroke if stroke and stroke != 'none' else fill
+            paths.append({'tag': tag, 'elem': elem, 'color': color or '#000000'})
+    
+    return paths
+
+def parse_path_d(d_string: str):
+    """Parse SVG path d attribute into coordinates."""
+    coords = []
+    numbers = re.findall(r'[-+]?[0-9]*\.?[0-9]+', d_string)
+    for i in range(0, len(numbers) - 1, 2):
+        try:
+            x = float(numbers[i])
+            y = float(numbers[i + 1])
+            coords.append((x, y))
+        except (ValueError, IndexError):
+            continue
+    return coords
+
+def get_viewbox(svg_content: str):
+    """Get SVG viewBox dimensions."""
+    try:
+        root = ET.fromstring(svg_content)
+    except ET.ParseError:
+        return 0, 0, 100, 100
+    
+    vb = root.get('viewBox', '')
+    if vb:
+        parts = vb.split()
+        if len(parts) == 4:
+            try:
+                return float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])
+            except ValueError:
+                pass
+    
+    w = root.get('width', '100')
+    h = root.get('height', '100')
+    try:
+        w_val = float(re.sub(r'[^0-9.]', '', w))
+        h_val = float(re.sub(r'[^0-9.]', '', h))
+    except ValueError:
+        w_val, h_val = 100, 100
+    
+    return 0, 0, w_val, h_val
 
 @app.post("/analyze")
-def analyze(req: AnalyzeRequest):
-    return {
-        "options": [
-            {
-                "key": "stitch_density",
-                "label": "Densidad de Puntada (mm)",
-                "type": "number",
-                "default": 2.5,
-                "description": "Distancia entre puntadas. Menor valor = más denso.",
-            },
-            {
-                "key": "width_mm",
-                "label": "Ancho del Diseño (mm)",
-                "type": "number",
-                "default": 100,
-                "description": "Ancho final del bordado en milímetros.",
-            },
-            {
-                "key": "height_mm",
-                "label": "Alto del Diseño (mm)",
-                "type": "number",
-                "default": 100,
-                "description": "Alto final del bordado en milímetros.",
-            },
-        ]
-    }
-
-
-def parse_svg_paths(svg_string: str):
-    """Extract basic line segments from SVG paths and polylines."""
+async def analyze(request: AnalyzeRequest):
     try:
-        root = ET.fromstring(svg_string)
-    except ET.ParseError as e:
-        raise HTTPException(status_code=400, detail=f"SVG inválido: {e}")
-
-    ns = {"svg": "http://www.w3.org/2000/svg"}
-    segments = []
-
-    # Get viewBox for coordinate scaling
-    viewbox = root.get("viewBox", "0 0 100 100")
-    parts = viewbox.split()
-    vb_w = float(parts[2]) if len(parts) >= 3 else 100
-    vb_h = float(parts[3]) if len(parts) >= 4 else 100
-
-    # Extract polyline/polygon points
-    for tag in ["polyline", "polygon"]:
-        for el in root.iter(f"{{{ns['svg']}}}{tag}") if ns else root.iter(tag):
-            pts_str = el.get("points", "")
-            if pts_str:
-                coords = []
-                for pair in pts_str.strip().split():
-                    xy = pair.split(",")
-                    if len(xy) == 2:
-                        coords.append((float(xy[0]), float(xy[1])))
-                if coords:
-                    segments.append(coords)
-
-    # Also try without namespace
-    for tag in ["polyline", "polygon"]:
-        for el in root.iter(tag):
-            pts_str = el.get("points", "")
-            if pts_str:
-                coords = []
-                for pair in pts_str.strip().split():
-                    xy = pair.split(",")
-                    if len(xy) == 2:
-                        coords.append((float(xy[0]), float(xy[1])))
-                if coords:
-                    segments.append(coords)
-
-    # Extract lines
-    for el in list(root.iter(f"{{{ns['svg']}}}line")) + list(root.iter("line")):
-        x1 = float(el.get("x1", 0))
-        y1 = float(el.get("y1", 0))
-        x2 = float(el.get("x2", 0))
-        y2 = float(el.get("y2", 0))
-        segments.append([(x1, y1), (x2, y2)])
-
-    # Extract rects as 4-point polygons
-    for el in list(root.iter(f"{{{ns['svg']}}}rect")) + list(root.iter("rect")):
-        x = float(el.get("x", 0))
-        y = float(el.get("y", 0))
-        w = float(el.get("width", 0))
-        h = float(el.get("height", 0))
-        if w > 0 and h > 0:
-            segments.append([(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)])
-
-    # If no geometry found, create a simple cross pattern as fallback
-    if not segments:
-        cx, cy = vb_w / 2, vb_h / 2
-        segments.append([(0, 0), (vb_w, vb_h)])
-        segments.append([(vb_w, 0), (0, vb_h)])
-
-    return segments, vb_w, vb_h
-
+        options = [
+            {"key": "stitch_density", "label": "Densidad de Puntada (mm)", "type": "number", "default": 2.5, "description": "Distancia entre puntadas. Menor valor = más denso."},
+            {"key": "width_mm", "label": "Ancho del Diseño (mm)", "type": "number", "default": 100, "description": "Ancho final del bordado en milímetros."},
+            {"key": "height_mm", "label": "Alto del Diseño (mm)", "type": "number", "default": 100, "description": "Alto final del bordado en milímetros."},
+        ]
+        return {"options": options}
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error en análisis: {str(e)}")
 
 @app.post("/convert")
-def convert(req: ConvertRequest):
+async def convert(request: ConvertRequest):
     try:
-        options = req.options or {}
+        options = request.options or {}
         width_mm = float(options.get("width_mm", 100))
         height_mm = float(options.get("height_mm", 100))
-        density = float(options.get("stitch_density", 2.5))
+        stitch_density = float(options.get("stitch_density", 2.5))
 
-        segments, vb_w, vb_h = parse_svg_paths(req.svg)
-
-        # Scale factors: SVG coords -> 0.1mm units (pyembroidery standard)
+        vb_x, vb_y, vb_w, vb_h = get_viewbox(request.svg)
+        
+        # Scale: SVG units -> 0.1mm (pyembroidery native unit)
         scale_x = (width_mm * 10) / vb_w if vb_w > 0 else 10
         scale_y = (height_mm * 10) / vb_h if vb_h > 0 else 10
+        
+        # Stitch length in 0.1mm
+        stitch_len = stitch_density * 10
 
-        # Build pattern using documented API
         pattern = pyembroidery.EmbPattern()
+        paths = extract_paths_from_svg(request.svg)
 
-        # Add a default black thread
-        thread = pyembroidery.EmbThread()
-        thread.set("name", "Black")
-        thread.set("color", 0x000000)
-        pattern.add_thread(thread)
+        if not paths:
+            # Create a simple cross pattern as fallback
+            pattern.add_thread({"color": 0x000000, "name": "Black"})
+            cx = width_mm * 5  # center in 0.1mm
+            cy = height_mm * 5
+            size = min(width_mm, height_mm) * 3
+            pattern.add_stitch_absolute(pyembroidery.JUMP, cx - size, cy - size)
+            pattern.add_stitch_absolute(pyembroidery.STITCH, cx + size, cy + size)
+            pattern.add_stitch_absolute(pyembroidery.JUMP, cx + size, cy - size)
+            pattern.add_stitch_absolute(pyembroidery.STITCH, cx - size, cy + size)
+            pattern.add_stitch_absolute(pyembroidery.END, 0, 0)
+        else:
+            for path_info in paths:
+                color_int = parse_color(path_info.get('color', '#000000'))
+                pattern.add_thread({"color": color_int})
+                
+                if 'd' in path_info:
+                    coords = parse_path_d(path_info['d'])
+                    if coords:
+                        first = coords[0]
+                        x = (first[0] - vb_x) * scale_x
+                        y = (first[1] - vb_y) * scale_y
+                        pattern.add_stitch_absolute(pyembroidery.JUMP, x, y)
+                        
+                        for coord in coords[1:]:
+                            x = (coord[0] - vb_x) * scale_x
+                            y = (coord[1] - vb_y) * scale_y
+                            pattern.add_stitch_absolute(pyembroidery.STITCH, x, y)
+                        
+                        pattern.add_stitch_absolute(pyembroidery.COLOR_BREAK, 0, 0)
+            
+            pattern.add_stitch_absolute(pyembroidery.END, 0, 0)
 
-        first_segment = True
-        for seg in segments:
-            for i, (x, y) in enumerate(seg):
-                px = x * scale_x
-                py = y * scale_y
-                if i == 0 and first_segment:
-                    pattern.add_stitch_absolute(pyembroidery.STITCH, px, py)
-                    first_segment = False
-                elif i == 0:
-                    pattern.add_stitch_absolute(pyembroidery.JUMP, px, py)
-                else:
-                    pattern.add_stitch_absolute(pyembroidery.STITCH, px, py)
-
-        pattern.add_stitch_absolute(pyembroidery.END, 0, 0)
-
-        # Write to temp file using write_pes (format-specific, avoids any dispatch issues)
         tmp_path = os.path.join(tempfile.gettempdir(), "output.pes")
         pyembroidery.write_pes(pattern, tmp_path)
 
         with open(tmp_path, "rb") as f:
             pes_bytes = f.read()
 
-        print(f"PES generado: {len(pes_bytes)} bytes")
+        os.remove(tmp_path)
+        print(f"V8 PES OK, size: {len(pes_bytes)} bytes")
 
-        return Response(
-            content=pes_bytes,
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": "attachment; filename=embroidery.pes"},
-        )
+        from fastapi.responses import Response
+        return Response(content=pes_bytes, media_type="application/octet-stream")
 
-    except HTTPException:
-        raise
     except Exception as e:
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {str(e)}")
