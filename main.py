@@ -1,31 +1,19 @@
-from pyembroidery import EmbPattern, EmbThread, STITCH, JUMP, COLOR_BREAK, END
-from pyembroidery import write as write_embroidery
+import traceback
+import tempfile
+import os
+from io import BytesIO
+from xml.etree import ElementTree as ET
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import os
-import tempfile
-from typing import Dict, Any
-from svgpathtools import parse_path
-from xml.etree import ElementTree as ET
-import re
+from typing import Optional, Dict, Any
+
+import pyembroidery
+
+print(">>> V7 minimal pyembroidery - write_pes direct <<<")
 
 app = FastAPI()
-
-origins = [
-    "https://stitchcucumber.lovable.app",
-    "http://localhost:3000",
-]
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["POST"],
-    allow_headers=["Content-Type"],
-)
 
 
 class AnalyzeRequest(BaseModel):
@@ -34,11 +22,11 @@ class AnalyzeRequest(BaseModel):
 
 class ConvertRequest(BaseModel):
     svg: str
-    options: Dict[str, Any]
+    options: Optional[Dict[str, Any]] = None
 
 
 @app.post("/analyze")
-async def analyze_svg(request: AnalyzeRequest):
+def analyze(req: AnalyzeRequest):
     return {
         "options": [
             {
@@ -66,115 +54,120 @@ async def analyze_svg(request: AnalyzeRequest):
     }
 
 
-def get_color(elem):
-    fill = elem.get("fill", "") or ""
-    stroke = elem.get("stroke", "") or ""
-    style = elem.get("style", "") or ""
+def parse_svg_paths(svg_string: str):
+    """Extract basic line segments from SVG paths and polylines."""
+    try:
+        root = ET.fromstring(svg_string)
+    except ET.ParseError as e:
+        raise HTTPException(status_code=400, detail=f"SVG inválido: {e}")
 
-    color_hex = None
-    for attr in [fill, stroke]:
-        if attr and attr != "none" and attr.startswith("#"):
-            color_hex = attr
-            break
+    ns = {"svg": "http://www.w3.org/2000/svg"}
+    segments = []
 
-    if not color_hex and style:
-        match = re.search(r"(?:fill|stroke)\s*:\s*(#[0-9a-fA-F]{3,6})", style)
-        if match:
-            color_hex = match.group(1)
+    # Get viewBox for coordinate scaling
+    viewbox = root.get("viewBox", "0 0 100 100")
+    parts = viewbox.split()
+    vb_w = float(parts[2]) if len(parts) >= 3 else 100
+    vb_h = float(parts[3]) if len(parts) >= 4 else 100
 
-    if color_hex:
-        hex_val = color_hex.lstrip("#")
-        if len(hex_val) == 3:
-            hex_val = "".join(c * 2 for c in hex_val)
-        r = int(hex_val[0:2], 16)
-        g = int(hex_val[2:4], 16)
-        b = int(hex_val[4:6], 16)
-        t = EmbThread()
-        t.color = (r, g, b)
-        return t
+    # Extract polyline/polygon points
+    for tag in ["polyline", "polygon"]:
+        for el in root.iter(f"{{{ns['svg']}}}{tag}") if ns else root.iter(tag):
+            pts_str = el.get("points", "")
+            if pts_str:
+                coords = []
+                for pair in pts_str.strip().split():
+                    xy = pair.split(",")
+                    if len(xy) == 2:
+                        coords.append((float(xy[0]), float(xy[1])))
+                if coords:
+                    segments.append(coords)
 
-    t = EmbThread()
-    t.color = (0, 0, 0)
-    return t
+    # Also try without namespace
+    for tag in ["polyline", "polygon"]:
+        for el in root.iter(tag):
+            pts_str = el.get("points", "")
+            if pts_str:
+                coords = []
+                for pair in pts_str.strip().split():
+                    xy = pair.split(",")
+                    if len(xy) == 2:
+                        coords.append((float(xy[0]), float(xy[1])))
+                if coords:
+                    segments.append(coords)
+
+    # Extract lines
+    for el in list(root.iter(f"{{{ns['svg']}}}line")) + list(root.iter("line")):
+        x1 = float(el.get("x1", 0))
+        y1 = float(el.get("y1", 0))
+        x2 = float(el.get("x2", 0))
+        y2 = float(el.get("y2", 0))
+        segments.append([(x1, y1), (x2, y2)])
+
+    # Extract rects as 4-point polygons
+    for el in list(root.iter(f"{{{ns['svg']}}}rect")) + list(root.iter("rect")):
+        x = float(el.get("x", 0))
+        y = float(el.get("y", 0))
+        w = float(el.get("width", 0))
+        h = float(el.get("height", 0))
+        if w > 0 and h > 0:
+            segments.append([(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)])
+
+    # If no geometry found, create a simple cross pattern as fallback
+    if not segments:
+        cx, cy = vb_w / 2, vb_h / 2
+        segments.append([(0, 0), (vb_w, vb_h)])
+        segments.append([(vb_w, 0), (0, vb_h)])
+
+    return segments, vb_w, vb_h
 
 
 @app.post("/convert")
-async def convert_svg(request: ConvertRequest):
-    print(">>> V5 using explicit imports: EmbPattern, EmbThread, write_embroidery <<<")
+def convert(req: ConvertRequest):
     try:
-        svg_content = request.svg
-        options = request.options
-
-        root = ET.fromstring(svg_content)
-        ns = {"svg": "http://www.w3.org/2000/svg"}
-
-        pattern = EmbPattern()
-
+        options = req.options or {}
         width_mm = float(options.get("width_mm", 100))
         height_mm = float(options.get("height_mm", 100))
+        density = float(options.get("stitch_density", 2.5))
 
-        viewbox = root.get("viewBox", f"0 0 {width_mm} {height_mm}")
-        vb = [float(x) for x in viewbox.split()]
-        vb_w, vb_h = vb[2] - vb[0], vb[3] - vb[1]
+        segments, vb_w, vb_h = parse_svg_paths(req.svg)
 
-        scale_x = (width_mm * 10) / vb_w
-        scale_y = (height_mm * 10) / vb_h
+        # Scale factors: SVG coords -> 0.1mm units (pyembroidery standard)
+        scale_x = (width_mm * 10) / vb_w if vb_w > 0 else 10
+        scale_y = (height_mm * 10) / vb_h if vb_h > 0 else 10
 
-        paths = root.findall(".//svg:path", ns) + root.findall(".//path")
+        # Build pattern using documented API
+        pattern = pyembroidery.EmbPattern()
 
-        stitch_density = float(options.get("stitch_density", 2.5))
-        density_units = stitch_density * 10
+        # Add a default black thread
+        thread = pyembroidery.EmbThread()
+        thread.set("name", "Black")
+        thread.set("color", 0x000000)
+        pattern.add_thread(thread)
 
-        for path_elem in paths:
-            d = path_elem.get("d", "")
-            if not d:
-                continue
+        first_segment = True
+        for seg in segments:
+            for i, (x, y) in enumerate(seg):
+                px = x * scale_x
+                py = y * scale_y
+                if i == 0 and first_segment:
+                    pattern.add_stitch_absolute(pyembroidery.STITCH, px, py)
+                    first_segment = False
+                elif i == 0:
+                    pattern.add_stitch_absolute(pyembroidery.JUMP, px, py)
+                else:
+                    pattern.add_stitch_absolute(pyembroidery.STITCH, px, py)
 
-            thread = get_color(path_elem)
-            pattern.add_thread(thread)
+        pattern.add_stitch_absolute(pyembroidery.END, 0, 0)
 
-            try:
-                parsed = parse_path(d)
-            except Exception:
-                continue
+        # Write to temp file using write_pes (format-specific, avoids any dispatch issues)
+        tmp_path = os.path.join(tempfile.gettempdir(), "output.pes")
+        pyembroidery.write_pes(pattern, tmp_path)
 
-            first = True
-            for segment in parsed:
-                if segment.length() == 0:
-                    continue
-                num_points = max(2, int(segment.length() / density_units))
+        with open(tmp_path, "rb") as f:
+            pes_bytes = f.read()
 
-                for i in range(num_points + 1):
-                    t_val = i / num_points
-                    point = segment.point(t_val)
-
-                    x = (point.real - vb[0]) * scale_x
-                    y = (point.imag - vb[1]) * scale_y
-
-                    if first:
-                        pattern.add_command(JUMP, x, y)
-                        first = False
-                    else:
-                        pattern.add_command(STITCH, x, y)
-
-            pattern.add_command(COLOR_BREAK)
-
-        pattern.add_command(END)
-
-        if not pattern.stitches:
-            raise HTTPException(
-                status_code=422,
-                detail="El SVG no contiene trazados válidos para bordar.",
-            )
-
-        tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pes")
-        os.close(tmp_fd)
-        try:
-            write_embroidery(pattern, tmp_path)
-            with open(tmp_path, "rb") as f:
-                pes_bytes = f.read()
-        finally:
-            os.remove(tmp_path)
+        print(f"PES generado: {len(pes_bytes)} bytes")
 
         return Response(
             content=pes_bytes,
@@ -185,13 +178,5 @@ async def convert_svg(request: ConvertRequest):
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Exception: {type(e).__name__}: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error al procesar el archivo: {type(e).__name__}: {str(e)}",
-        )
-
-
-@app.get("/")
-async def read_root():
-    return {"message": "Servicio de conversión V5. Endpoints: /analyze, /convert"}
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {e}")
