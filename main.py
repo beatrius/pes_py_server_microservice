@@ -102,6 +102,7 @@ def get_color(elem):
 
 @app.post("/convert")
 async def convert_svg(request: ConvertRequest):
+    print(">>> USING DIRECT IMPORTS V2 <<<")
     try:
         svg_content = request.svg
         options = request.options
