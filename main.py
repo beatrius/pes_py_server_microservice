@@ -166,7 +166,7 @@ async def convert_svg(request: ConvertRequest):
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".pes")
         os.close(tmp_fd)
         try:
-            pyembroidery.write(pattern, tmp_path)
+            pyembroidery.write_pes(pattern, tmp_path)
             with open(tmp_path, "rb") as f:
                 pes_bytes = f.read()
         finally:
