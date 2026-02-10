@@ -153,7 +153,7 @@ async def convert_svg(request: ConvertRequest):
             raise HTTPException(status_code=422, detail="El SVG no contiene trazados válidos para bordar.")
 
         output = io.BytesIO()
-        pyembroidery.write_pes(pattern, output)
+        pyembroidery.write(pattern, output, {"format": "pes"})
         output.seek(0)
         
         return Response(
