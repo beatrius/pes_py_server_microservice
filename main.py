@@ -5,7 +5,9 @@ from pydantic import BaseModel
 import pyembroidery
 import io
 from typing import Dict, Any
-from svgelements import SVG, Path, Shape, Color
+from svgpathtools import parse_path
+from xml.etree import ElementTree as ET
+import re
 
 app = FastAPI()
 
@@ -32,94 +34,134 @@ class ConvertRequest(BaseModel):
 
 @app.post("/analyze")
 async def analyze_svg(request: AnalyzeRequest):
+    # This endpoint returns the user-configurable options
     return {
         "options": [
             {
-                "key": "stitch_spacing",
-                "label": "Espaciado de Puntada (mm)",
+                "key": "stitch_density",
+                "label": "Densidad de Puntada (mm)",
                 "type": "number",
-                "default": 2.0,
+                "default": 2.5,
                 "description": "Distancia entre puntadas a lo largo de un trazo. Menor valor = más denso."
             },
             {
-                "key": "max_stitch_length",
-                "label": "Longitud Máxima de Puntada (mm)",
+                "key": "width_mm",
+                "label": "Ancho del Diseño (mm)",
                 "type": "number",
-                "default": 3.0,
-                "description": "Divide puntadas largas en más pequeñas. Afecta la densidad."
+                "default": 100,
+                "description": "Ancho final del bordado en milímetros."
             },
             {
-                "key": "tie_on",
-                "label": "Activar Nudo de Inicio",
-                "type": "boolean",
-                "default": True,
-            },
-            {
-                "key": "tie_off",
-                "label": "Activar Nudo de Fin",
-                "type": "boolean",
-                "default": True,
+                "key": "height_mm",
+                "label": "Alto del Diseño (mm)",
+                "type": "number",
+                "default": 100,
+                "description": "Alto final del bordado en milímetros."
             }
         ]
     }
 
+# Helper function to extract color from SVG element
+def get_color(elem):
+    fill = elem.get("fill", "") or ""
+    stroke = elem.get("stroke", "") or ""
+    style = elem.get("style", "") or ""
+    
+    color_hex = None
+    for attr in [fill, stroke]:
+        if attr and attr != "none" and attr.startswith("#"):
+            color_hex = attr
+            break
+    
+    if not color_hex and style:
+        match = re.search(r"(?:fill|stroke)\s*:\s*(#[0-9a-fA-F]{3,6})", style)
+        if match:
+            color_hex = match.group(1)
+    
+    if color_hex:
+        hex_val = color_hex.lstrip("#")
+        if len(hex_val) == 3:
+            hex_val = "".join(c*2 for c in hex_val)
+        r, g, b = int(hex_val[0:2], 16), int(hex_val[2:4], 16), int(hex_val[4:6], 16)
+        return pyembroidery.EmbThread({"color": (r, g, b)})
+    
+    return pyembroidery.EmbThread({"color": (0, 0, 0)}) # Default to black
+
 @app.post("/convert")
 async def convert_svg(request: ConvertRequest):
     try:
-        svg_stream = io.StringIO(request.svg)
-        # El factor de escala convierte píxeles (asumiendo 96 DPI) a unidades de 1/10 mm
-        scale_factor = 254.0 / 96.0
-        svg = SVG.parse(svg_stream, transform=f"scale({scale_factor})")
+        svg_content = request.svg
+        options = request.options
+        
+        root = ET.fromstring(svg_content)
+        ns = {"svg": "http://www.w3.org/2000/svg"}
+        
         pattern = pyembroidery.EmbPattern()
-
-        opts = request.options
-        # Convertir mm a unidades de 1/10 mm
-        stitch_spacing = float(opts.get("stitch_spacing", 2.0)) * 10.0
-
-        for element in svg.elements():
-            if isinstance(element, Shape):
-                element = Path(element)
+        
+        width_mm = float(options.get("width_mm", 100))
+        height_mm = float(options.get("height_mm", 100))
+        
+        viewbox = root.get("viewBox", f"0 0 {width_mm} {height_mm}")
+        vb = [float(x) for x in viewbox.split()]
+        vb_w, vb_h = vb[2] - vb[0], vb[3] - vb[1]
+        
+        scale_x = (width_mm * 10) / vb_w  # mm to 0.1mm units
+        scale_y = (height_mm * 10) / vb_h
+        
+        paths = root.findall(".//svg:path", ns) + root.findall(".//path")
+        
+        stitch_density = float(options.get("stitch_density", 2.5))
+        density_units = stitch_density * 10  # to 0.1mm
+        
+        for path_elem in paths:
+            d = path_elem.get("d", "")
+            if not d:
+                continue
             
-            if isinstance(element, Path):
-                for subpath in element.as_subpaths():
-                    subpath = Path(subpath)
-                    if subpath.length() == 0:
-                        continue
-
-                    segments = int(subpath.length() / stitch_spacing)
-                    if segments < 1:
-                        continue
-
-                    points = [subpath.point(i / float(segments)) for i in range(segments + 1)]
-                    points = [(p.x, p.y) for p in points]
+            thread = get_color(path_elem)
+            pattern.add_thread(thread)
+            
+            try:
+                parsed = parse_path(d)
+            except Exception:
+                continue
+            
+            first = True
+            for segment in parsed:
+                if segment.length() == 0:
+                    continue
+                num_points = max(2, int(segment.length() / density_units))
+                
+                for i in range(num_points + 1):
+                    t = i / num_points
+                    point = segment.point(t)
                     
-                    color = "black"
-                    if element.stroke and element.stroke.value is not None:
-                        color = element.stroke.hex
+                    x = (point.real - vb[0]) * scale_x
+                    y = (point.imag - vb[1]) * scale_y
                     
-                    pattern.add_block(points, color)
-
+                    if first:
+                        pattern.add_command(pyembroidery.MOVE, x, y)
+                        first = False
+                    else:
+                        pattern.add_command(pyembroidery.STITCH, x, y)
+            
+            pattern.add_command(pyembroidery.COLOR_BREAK)
+        
+        pattern.add_command(pyembroidery.END)
+        
         if not pattern.stitches:
-            raise HTTPException(status_code=422, detail="El SVG no contiene trazados de línea (strokes) válidos para bordar.")
+            raise HTTPException(status_code=422, detail="El SVG no contiene trazados válidos para bordar.")
 
-        settings = {
-            "max_stitch_length": float(opts.get("max_stitch_length", 3.0)) * 10.0,
-            "tie_on": pyembroidery.CONTINGENCY_TIE_ON_THREE_SMALL if opts.get("tie_on", True) else pyembroidery.CONTINGENCY_TIE_ON_NONE,
-            "tie_off": pyembroidery.CONTINGENCY_TIE_OFF_THREE_SMALL if opts.get("tie_off", True) else pyembroidery.CONTINGENCY_TIE_OFF_NONE,
-        }
-
-        normalized_pattern = pattern.get_normalized_pattern(settings)
-
-        pes_stream = io.BytesIO()
-        pyembroidery.write_pes(normalized_pattern, pes_stream)
-        pes_stream.seek(0)
-
+        output = io.BytesIO()
+        pyembroidery.write_pes(pattern, output)
+        output.seek(0)
+        
         return Response(
-            content=pes_stream.getvalue(),
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": "attachment; filename=output.pes"}
+            content=output.getvalue(), 
+            media_type="application/octet-stream", 
+            headers={"Content-Disposition": "attachment; filename=embroidery.pes"}
         )
-
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al procesar el archivo: {str(e)}")
 
