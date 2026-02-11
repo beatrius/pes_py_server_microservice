@@ -1,5 +1,3 @@
 fastapi==0.110.0
 uvicorn==0.29.0
 python-multipart==0.0.9
-pyembroidery==1.4.0
-svgpathtools==1.6.1
