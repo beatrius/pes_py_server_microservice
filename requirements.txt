@@ -3,3 +3,6 @@ uvicorn==0.29.0
 python-multipart==0.0.9
 lxml==5.1.0
 numpy==1.26.4
+tinycss2==1.2.1
+cssselect2==0.7.0
+pillow==10.2.0
