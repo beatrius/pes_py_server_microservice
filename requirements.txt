@@ -15,3 +15,5 @@ diskcache==5.6.3
 shapely==2.0.3
 colormath==3.0.0
 pyembroidery==1.5.1
+trimesh==4.1.4
+rtree==1.2.0
