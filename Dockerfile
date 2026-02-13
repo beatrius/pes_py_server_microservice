@@ -7,11 +7,14 @@ RUN apt-get update && apt-get install -y \
     libnss3 \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Instalar Inkstitch usando el paquete .deb (Más fiable)
+# 2. Instalar Inkstitch usando el paquete .deb
 RUN wget https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch_3.0.1_amd64.deb \
     && apt-get update \
     && apt-get install -y ./inkstitch_3.0.1_amd64.deb \
     && rm inkstitch_3.0.1_amd64.deb
+
+# 3. Forzar que el binario sea ejecutable (por seguridad)
+RUN chmod +x /usr/bin/inkstitch
 
 WORKDIR /app
 COPY . .
