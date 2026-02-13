@@ -6,9 +6,9 @@ RUN apt-get update && apt-get install -y \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Inkstitch CLI (Corregido)
-RUN wget https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-amd64.tar.gz \
-    && tar -xzvf inkstitch-v3.0.1-linux-amd64.tar.gz \
+# Instalar Inkstitch CLI (Versión universal)
+RUN wget https://github.com/inkstitch/inkstitch/releases/latest/download/inkstitch-linux-amd64.tar.gz \
+    && tar -xzvf inkstitch-linux-amd64.tar.gz \
     && mv inkstitch /usr/local/bin/inkstitch \
     && chmod +x /usr/local/bin/inkstitch
 
