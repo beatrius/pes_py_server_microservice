@@ -16,6 +16,9 @@ RUN curl -L "https://github.com/inkstitch/inkstitch/archive/refs/tags/v3.0.1.zip
     && mv inkstitch-3.0.1 /usr/local/bin/inkstitch_dir \
     && rm inkstitch.zip
 
+# PARCHE CRÍTICO: Comentamos la línea que causa el ValueError en Render
+RUN sed -i 's/sys.path.remove(extensions_path)/pass # sys.path.remove(extensions_path)/g' /usr/local/bin/inkstitch_dir/inkstitch.py
+
 # 3. Crear el ejecutable manual
 # Inkstitch en su código fuente se ejecuta llamando a su script principal
 RUN echo '#!/usr/bin/env python3\nimport sys\nimport os\nsys.path.append("/usr/local/bin/inkstitch_dir")\nfrom inkstitch import inkstitch\nif __name__ == "__main__":\n    sys.exit(inkstitch.main())' > /usr/local/bin/inkstitch \
