@@ -39,7 +39,7 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
 
         # Ejecución de Inkstitch
         process = subprocess.run([
-            "inkstitch",
+            "/usr/bin/inkstitch", 
             "--extension=output",
             "--format=pes",
             input_path,
