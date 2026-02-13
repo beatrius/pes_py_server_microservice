@@ -10,13 +10,13 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 app = FastAPI()
 
-# Configuración de CORS ultra-permisiva para pruebas
+# Configuración de CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Permite cualquier origen
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Permite todos los métodos (incluyendo OPTIONS y POST)
-    allow_headers=["*"],  # Permite todos los encabezados
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.get("/")
@@ -32,14 +32,14 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
     try:
         content = await file.read()
         if not content:
-            return {"error": "Archivo vacío"}, 400
+            raise HTTPException(status_code=400, detail="Archivo vacío")
             
         with open(input_path, "wb") as f:
             f.write(content)
 
-        # Ejecución de Inkstitch
-       process = subprocess.run([
-            "inkstitch", # El sistema ya sabe que está en /usr/local/bin
+        # Ejecución de Inkstitch (Indentación corregida aquí)
+        process = subprocess.run([
+            "inkstitch", 
             "--extension=output",
             "--format=pes",
             input_path,
@@ -47,10 +47,10 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
         ], capture_output=True, text=True)
 
         if process.returncode != 0:
-            return {"error": "Error en Inkstitch", "detail": process.stderr}, 500
+            raise HTTPException(status_code=500, detail=f"Error en Inkstitch: {process.stderr}")
 
         if not os.path.exists(output_path):
-            return {"error": "No se generó el archivo PES"}, 500
+            raise HTTPException(status_code=500, detail="No se generó el archivo PES")
 
         with open(output_path, "rb") as f:
             pes_bytes = f.read()
@@ -60,9 +60,12 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
             media_type="application/octet-stream"
         )
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        return {"error": str(e)}, 500
+        raise HTTPException(status_code=500, detail=str(e))
     
     finally:
+        # Limpieza de archivos temporales
         if os.path.exists(input_path): os.remove(input_path)
         if os.path.exists(output_path): os.remove(output_path)
