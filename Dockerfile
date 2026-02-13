@@ -7,12 +7,12 @@ RUN apt-get update && apt-get install -y \
     libnss3 \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Instalar Inkstitch CLI (URL UNIVERSAL v3.0.1)
-RUN wget https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux.tar.gz \
-    && tar -xzvf inkstitch-v3.0.1-linux.tar.gz \
-    && cp inkstitch/inkstitch /usr/local/bin/inkstitch \
+# 2. Instalar Inkstitch CLI (Versión v3.0.0 con URL verificada)
+RUN wget https://github.com/inkstitch/inkstitch/releases/download/v3.0.0/inkstitch-v3.0.0-linux-en_US.tar.gz \
+    && tar -xzvf inkstitch-v3.0.0-linux-en_US.tar.gz \
+    && mv inkstitch /usr/local/bin/inkstitch \
     && chmod +x /usr/local/bin/inkstitch \
-    && rm -rf inkstitch inkstitch-v3.0.1-linux.tar.gz
+    && rm inkstitch-v3.0.0-linux-en_US.tar.gz
 
 WORKDIR /app
 COPY . .
