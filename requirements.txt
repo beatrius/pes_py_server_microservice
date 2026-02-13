@@ -9,3 +9,5 @@ cssselect==1.2.0
 pillow==10.2.0
 scipy==1.12.0
 pyyaml==6.0.1
+appdirs==1.4.4
+networkx==3.2.1
