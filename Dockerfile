@@ -1,12 +1,12 @@
 FROM python:3.11-slim
 
-# Instalar Inkscape y dependencias necesarias
+# 1. Instalar Inkscape y dependencias
 RUN apt-get update && apt-get install -y \
     inkscape \
     wget \
     && rm -rf /var/lib/apt/lists/*
 
-# Instalar Inkstitch CLI (Versión específica verificada)
+# 2. Instalar Inkstitch CLI (Copiando el nombre exacto del release)
 RUN wget https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-3.0.1-linux-en_US.tar.gz \
     && tar -xzvf inkstitch-3.0.1-linux-en_US.tar.gz \
     && mv inkstitch /usr/local/bin/inkstitch \
