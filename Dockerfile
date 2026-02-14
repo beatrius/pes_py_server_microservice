@@ -65,6 +65,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV QT_QPA_PLATFORM=offscreen
 ENV INKSCAPE_PROFILE_DIR=/tmp
 ENV PYTHONPATH="${PYTHONPATH}:/usr/share/inkscape/extensions:/usr/local/bin/inkstitch_dir"
+ENV INKSTITCH_NO_API_SERVER=1
 
 # Render usa la variable $PORT automáticamente
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port $PORT"]
