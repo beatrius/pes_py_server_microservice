@@ -16,21 +16,28 @@ RUN curl -L "https://github.com/inkstitch/inkstitch/archive/refs/tags/v3.0.1.zip
     && mv inkstitch-3.0.1 /usr/local/bin/inkstitch_dir \
     && rm inkstitch.zip
 
-# --- PARCHE MAESTRO: MOCK MULTINIVEL DE WX ---
-# Creamos la estructura física de directorios para engañar al sistema de importación
+
+# --- PARCHE DEFINITIVO: ESTRUCTURA FÍSICA DE PAQUETES WX ---
+# 1. Creamos la jerarquía completa de carpetas
 RUN mkdir -p /usr/local/lib/python3.11/site-packages/wx/lib/agw
 
-# Creamos los archivos __init__.py necesarios para que Python los reconozca como paquetes
-RUN echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nsys.modules["wx"] = m' > /usr/local/lib/python3.11/site-packages/wx/__init__.py && \
-    echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nsys.modules["wx.lib"] = m' > /usr/local/lib/python3.11/site-packages/wx/lib/__init__.py && \
-    echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nsys.modules["wx.lib.agw"] = m\nsys.modules["wx.lib.agw.floatspin"] = m' > /usr/local/lib/python3.11/site-packages/wx/lib/agw/__init__.py
+# 2. Creamos los archivos __init__.py en cada nivel para que Python los reconozca como paquetes
+# Nivel raíz: wx
+RUN echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nsys.modules["wx"] = m' > /usr/local/lib/python3.11/site-packages/wx/__init__.py
 
-# Inyectamos submódulos comunes en el nivel raíz para blindar el arranque
+# Nivel 2: wx.lib
+RUN echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nsys.modules["wx.lib"] = m' > /usr/local/lib/python3.11/site-packages/wx/lib/__init__.py
+
+# Nivel 3: wx.lib.agw
+RUN echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nsys.modules["wx.lib.agw"] = m\nsys.modules["wx.lib.agw.floatspin"] = m' > /usr/local/lib/python3.11/site-packages/wx/lib/agw/__init__.py
+
+# 3. Inyectamos submódulos adicionales comunes para blindar el arranque total
 RUN echo 'import sys\nfrom unittest.mock import MagicMock\nm = MagicMock()\nfor mod in ["wx.adv", "wx.grid", "wx.aui", "wx.dataview", "wx.html", "wx.stc", "wx.xml"]:\n    sys.modules[mod] = m' >> /usr/local/lib/python3.11/site-packages/wx/__init__.py
 
-# PARCHE DE RUTA: Corregimos el error de sys.path.remove de Inkstitch
+# 4. PARCHE DE RUTA: Corregimos el error de sys.path.remove original de Inkstitch
 RUN sed -i 's/sys.path.remove(extensions_path)/pass # sys.path.remove(extensions_path)/g' /usr/local/bin/inkstitch_dir/inkstitch.py
-# -----------------------------------------------
+# -----------------------------------------------------------
+
 
 # 3. Crear el ejecutable manual de Inkstitch
 RUN echo '#!/usr/bin/env python3\n\
