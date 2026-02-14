@@ -16,34 +16,36 @@ RUN curl -L "https://github.com/inkstitch/inkstitch/archive/refs/tags/v3.0.1.zip
     && mv inkstitch-3.0.1 /usr/local/bin/inkstitch_dir \
     && rm inkstitch.zip
 
-# --- EL PARCHE DE ESTRUCTURA FÍSICA ---
-# Creamos cada carpeta del camino para que 'wx.lib.agw.floatspin' sea una ruta real
-RUN mkdir -p /usr/local/lib/python3.11/site-packages/wx/lib/agw/floatspin
+# --- CIRUGÍA DE ESTRUCTURA DE PAQUETES ---
+# Creamos todas las carpetas que Inkstitch ha pedido y las que suele pedir
+RUN mkdir -p /usr/local/lib/python3.11/site-packages/wx/lib/agw/floatspin \
+    && mkdir -p /usr/local/lib/python3.11/site-packages/wx/lib/intctrl
 
-# Creamos los archivos __init__.py en cada nivel. 
-# Esto es lo que convierte una carpeta en un "paquete" para Python.
-RUN touch /usr/local/lib/python3.11/site-packages/wx/__init__.py && \
-    touch /usr/local/lib/python3.11/site-packages/wx/lib/__init__.py && \
-    touch /usr/local/lib/python3.11/site-packages/wx/lib/agw/__init__.py && \
-    touch /usr/local/lib/python3.11/site-packages/wx/lib/agw/floatspin/__init__.py
+# Creamos los __init__.py en cada nivel para que Python los reconozca como paquetes legales
+RUN touch /usr/local/lib/python3.11/site-packages/wx/__init__.py \
+    && touch /usr/local/lib/python3.11/site-packages/wx/lib/__init__.py \
+    && touch /usr/local/lib/python3.11/site-packages/wx/lib/agw/__init__.py \
+    && touch /usr/local/lib/python3.11/site-packages/wx/lib/agw/floatspin/__init__.py \
+    && touch /usr/local/lib/python3.11/site-packages/wx/lib/intctrl/__init__.py
 
-# Inyectamos el código de engaño en el primer __init__.py que Python leerá
+# Inyectamos el Mocking global en el raíz de wx
 RUN echo 'import sys\n\
 from unittest.mock import MagicMock\n\
 m = MagicMock()\n\
+# Lista extendida para cubrir los nuevos errores\n\
 modules = [\n\
-    "wx", "wx.adv", "wx.lib", "wx.lib.agw", \n\
-    "wx.lib.agw.floatspin", "wx.grid", "wx.aui", \n\
-    "wx.dataview", "wx.html", "wx.stc", "wx.xml"\n\
+    "wx", "wx.adv", "wx.lib", "wx.lib.agw", "wx.lib.agw.floatspin", \n\
+    "wx.lib.intctrl", "wx.grid", "wx.aui", "wx.dataview", "wx.html", \n\
+    "wx.stc", "wx.xml", "wx.core"\n\
 ]\n\
 for mod in modules:\n\
     sys.modules[mod] = m' > /usr/local/lib/python3.11/site-packages/wx/__init__.py
 
-# Corregimos el error interno de Inkstitch con las rutas
+# Corregimos el error de ruta interno de Inkstitch
 RUN sed -i 's/sys.path.remove(extensions_path)/pass # sys.path.remove(extensions_path)/g' /usr/local/bin/inkstitch_dir/inkstitch.py
 # --------------------------------------
 
-# 3. Crear el ejecutable manual de Inkstitch
+# 3. Crear el ejecutable manual
 RUN echo '#!/usr/bin/env python3\n\
 import sys\n\
 import os\n\
@@ -55,7 +57,7 @@ if __name__ == "__main__":\n\
 
 COPY . .
 
-# 4. Instalar dependencias de Python (Asegúrate de que requirements.txt esté actualizado)
+# 4. Instalar dependencias
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Variables de entorno
