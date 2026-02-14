@@ -18,6 +18,10 @@ RUN curl -L "https://github.com/inkstitch/inkstitch/archive/refs/tags/v3.0.1.zip
 
 # PARCHE CRÍTICO: Evitar el error de lista (ValueError) en el arranque de Inkstitch
 RUN sed -i 's/sys.path.remove(extensions_path)/pass # sys.path.remove(extensions_path)/g' /usr/local/bin/inkstitch_dir/inkstitch.py
+# ... después del primer parche de sed ...
+
+# SEGUNDO PARCHE CRÍTICO: Inyectar el Mock de wx directamente en el archivo fuente de Inkstitch
+RUN sed -i '1i import sys\nfrom unittest.mock import MagicMock\nsys.modules["wx"] = MagicMock()\nsys.modules["wx.lib"] = MagicMock()\nsys.modules["wx.lib.newevent"] = MagicMock()' /usr/local/bin/inkstitch_dir/inkstitch.py
 
 # 3. Crear el ejecutable manual
 RUN echo '#!/usr/bin/env python3\nimport sys\nimport os\nsys.path.append("/usr/local/bin/inkstitch_dir")\nfrom inkstitch import inkstitch\nif __name__ == "__main__":\n    sys.exit(inkstitch.main())' > /usr/local/bin/inkstitch \
