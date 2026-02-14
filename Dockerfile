@@ -16,26 +16,44 @@ RUN curl -L "https://github.com/inkstitch/inkstitch/archive/refs/tags/v3.0.1.zip
     && mv inkstitch-3.0.1 /usr/local/bin/inkstitch_dir \
     && rm inkstitch.zip
 
-# PARCHE CRÍTICO: Evitar el error de lista (ValueError) en el arranque de Inkstitch
-RUN sed -i 's/sys.path.remove(extensions_path)/pass # sys.path.remove(extensions_path)/g' /usr/local/bin/inkstitch_dir/inkstitch.py
-# ... después del primer parche de sed ...
+# --- PARCHE DE NIVEL DIOS: MOCK FÍSICO DE WX ---
+# Creamos la carpeta del paquete para que Python lo reconozca como tal
+RUN mkdir -p /usr/local/lib/python3.11/site-packages/wx
 
-# SEGUNDO PARCHE CRÍTICO: Inyectar el Mock de wx directamente en el archivo fuente de Inkstitch
-RUN sed -i '1i import sys\nfrom unittest.mock import MagicMock\nsys.modules["wx"] = MagicMock()\nsys.modules["wx.lib"] = MagicMock()\nsys.modules["wx.lib.newevent"] = MagicMock()' /usr/local/bin/inkstitch_dir/inkstitch.py
+# Creamos el __init__.py que inyecta todos los submódulos que Inkstitch busca
+RUN echo 'import sys\n\
+from unittest.mock import MagicMock\n\
+m = MagicMock()\n\
+sys.modules["wx"] = m\n\
+sys.modules["wx.adv"] = m\n\
+sys.modules["wx.lib"] = m\n\
+sys.modules["wx.lib.newevent"] = m\n\
+sys.modules["wx.grid"] = m\n\
+sys.modules["wx.aui"] = m\n\
+sys.modules["wx.dataview"] = m' > /usr/local/lib/python3.11/site-packages/wx/__init__.py
+
+# PARCHE DE RUTA: Corregimos el error de sys.path.remove que bloquea el arranque
+RUN sed -i 's/sys.path.remove(extensions_path)/pass # sys.path.remove(extensions_path)/g' /usr/local/bin/inkstitch_dir/inkstitch.py
+# -----------------------------------------------
 
 # 3. Crear el ejecutable manual
-RUN echo '#!/usr/bin/env python3\nimport sys\nimport os\nsys.path.append("/usr/local/bin/inkstitch_dir")\nfrom inkstitch import inkstitch\nif __name__ == "__main__":\n    sys.exit(inkstitch.main())' > /usr/local/bin/inkstitch \
+RUN echo '#!/usr/bin/env python3\n\
+import sys\n\
+import os\n\
+sys.path.append("/usr/local/bin/inkstitch_dir")\n\
+from inkstitch import inkstitch\n\
+if __name__ == "__main__":\n\
+    sys.exit(inkstitch.main())' > /usr/local/bin/inkstitch \
     && chmod +x /usr/local/bin/inkstitch
 
 COPY . .
 
-# 4. Instalar dependencias de Python (Asegúrate de que requirements.txt incluya numpy)
+# 4. Instalar dependencias de Python
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Variables de entorno críticas
-ENV DISPLAY=:0
+ENV QT_QPA_PLATFORM=offscreen
 ENV INKSCAPE_PROFILE_DIR=/tmp
-# PYTHONPATH debe incluir las extensiones del sistema para que Inkstitch encuentre 'inkex' y 'numpy'
 ENV PYTHONPATH="${PYTHONPATH}:/usr/share/inkscape/extensions:/usr/local/bin/inkstitch_dir"
 
 # Render usa la variable $PORT automáticamente
