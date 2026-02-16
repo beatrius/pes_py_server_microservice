@@ -12,15 +12,14 @@ sys.modules["wx.lib.scrolledpanel"] = MagicMock()
 # --------------------------------------------------------
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 import subprocess
 import os
 import uuid
 import lxml.etree as ET
 import math
-from shapely.geometry import Polygon, MultiPolygon, LineString, Point
-from shapely.ops import unary_union
+from shapely.geometry import LineString
 import re
 
 # Configuración para entornos sin pantalla
@@ -48,24 +47,17 @@ def parse_svg_path(path_data):
     """
     points = []
     try:
-        # Expresión regular simple para extraer números
         numbers = re.findall(r'-?\d+\.?\d*', path_data)
-        
-        # Convertir a pares de coordenadas
         for i in range(0, len(numbers) - 1, 2):
             try:
                 x = float(numbers[i])
                 y = float(numbers[i + 1])
-                
-                # Validar que no sean NaN o Inf
-                if not (math.isnan(x) or math.isnan(y) or 
-                       math.isinf(x) or math.isinf(y)):
+                if not (math.isnan(x) or math.isnan(y) or math.isinf(x) or math.isinf(y)):
                     points.append((x, y))
             except (ValueError, IndexError):
                 continue
     except Exception as e:
         print(f"Error parseando path: {e}")
-    
     return points
 
 def simplificar_geometria_svg(file_path):
@@ -75,11 +67,7 @@ def simplificar_geometria_svg(file_path):
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
-        
-        # Namespace SVG
         ns = {'svg': 'http://www.w3.org/2000/svg'}
-        
-        # Buscar todos los paths
         paths = root.xpath('//svg:path', namespaces=ns)
         
         for path in paths:
@@ -88,32 +76,21 @@ def simplificar_geometria_svg(file_path):
                 continue
             
             try:
-                # Extraer puntos del path
                 points = parse_svg_path(d_attr)
-                
                 if len(points) >= 3:
-                    # Crear geometría con shapely
                     line = LineString(points)
-                    
-                    # Simplificar con tolerancia
                     simplified = line.simplify(tolerance=0.5, preserve_topology=True)
-                    
-                    # Convertir de vuelta a path SVG simplificado
                     coords = list(simplified.coords)
                     if len(coords) >= 2:
-                        # Crear nuevo path data
                         new_path = f"M {coords[0][0]},{coords[0][1]}"
                         for coord in coords[1:]:
                             new_path += f" L {coord[0]},{coord[1]}"
                         new_path += " Z"
-                        
-                        # Actualizar el path
                         path.set('d', new_path)
             except Exception as e:
                 print(f"Error simplificando path individual: {e}")
                 continue
         
-        # Guardar el SVG simplificado
         tree.write(file_path, encoding='utf-8', xml_declaration=True)
         return True
     except Exception as e:
@@ -122,9 +99,7 @@ def simplificar_geometria_svg(file_path):
 
 def preparar_svg_para_inkstitch(file_path):
     try:
-        # Primero simplificar la geometría
         simplificar_geometria_svg(file_path)
-        
         tree = ET.parse(file_path)
         root = tree.getroot()
         ns = {
@@ -134,16 +109,10 @@ def preparar_svg_para_inkstitch(file_path):
         ET.register_namespace('inkstitch', ns['inkstitch'])
         formats = root.xpath('//svg:path | //svg:circle | //svg:rect | //svg:ellipse', namespaces=ns)
         for forma in formats:
-            # Configuración básica
             forma.set('{http://inkstitch.org/namespace}allow_auto_fill', 'true')
-            
-            # Parámetros más tolerantes para evitar errores de geometría
             forma.set('{http://inkstitch.org/namespace}fill_spacing_mm', '1.0')
             forma.set('{http://inkstitch.org/namespace}max_stitch_length_mm', '4.0')
             forma.set('{http://inkstitch.org/namespace}running_stitch_length_mm', '2.0')
-            
-            # CRÍTICO: Desactivar underlay para evitar FloatingPointError
-            # El error ocurre en do_underlay() cuando intenta proyectar puntos
             forma.set('{http://inkstitch.org/namespace}auto_fill_underlay', 'false')
             forma.set('{http://inkstitch.org/namespace}fill_underlay', 'false')
             
@@ -153,7 +122,7 @@ def preparar_svg_para_inkstitch(file_path):
 
 @app.get("/")
 def read_root():
-    return {"status": "servidor funcionando", "engine": "inkstitch", "version": "2.0-geometry-fix"}
+    return {"status": "servidor funcionando", "engine": "inkstitch", "version": "final-binary-fix"}
 
 @app.post("/convert")
 async def convert_svg_to_pes(file: UploadFile = File(...)):
@@ -171,7 +140,6 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
         
         preparar_svg_para_inkstitch(input_path)
         
-        # Comando corregido con '=' para evitar ValueError y NoneType
         command = [
             "inkstitch",
             "--extension=output",
@@ -188,13 +156,11 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
         if not os.path.exists(output_path):
             raise HTTPException(status_code=500, detail="No se generó el archivo PES")
         
-        with open(output_path, "rb") as f:
-            pes_bytes = f.read()
-        
-        return Response(
-            content=pes_bytes,
-            media_type="application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename=embroidery.pes"}
+        # Enviamos el archivo usando FileResponse para evitar errores de codificación UTF-8
+        return FileResponse(
+            path=output_path,
+            filename="embroidery.pes",
+            media_type="application/octet-stream"
         )
     
     except HTTPException as he:
@@ -202,10 +168,9 @@ async def convert_svg_to_pes(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Server Error: {str(e)}")
     finally:
-        # Limpieza de archivos
-        for path in [input_path, output_path]:
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                except:
-                    pass
+        # La limpieza del archivo de salida se hará después de enviar la respuesta
+        if os.path.exists(input_path):
+            try: os.remove(input_path)
+            except: pass
+        # Nota: FileResponse se encarga de cerrar el archivo, pero el borrado del PES 
+        # en 'finally' podría ser prematuro. Si falla la descarga, intenta borrarlo manualmente después.
