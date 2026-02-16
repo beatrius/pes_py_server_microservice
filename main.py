@@ -44,13 +44,37 @@ def preparar_svg(file_path):
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
-        ns = {'svg': 'http://www.w3.org/2000/svg', 'inkstitch': 'http://inkstitch.org/namespace'}
+        ns = {
+            'svg': 'http://www.w3.org/2000/svg',
+            'inkstitch': 'http://inkstitch.org/namespace'
+        }
         ET.register_namespace('inkstitch', ns['inkstitch'])
-        for el in root.xpath('//svg:path | //svg:circle | //svg:rect', namespaces=ns):
+        
+        # 1. Asegurar dimensiones físicas (Inkstitch ama los milímetros)
+        # 204px a 96dpi son aproximadamente 54mm
+        root.set('width', '204mm')
+        root.set('height', '50mm')
+
+        # 2. Buscar rectángulos y otras formas
+        # Tu SVG usa un <rect>, vamos a asegurarnos de que Inkstitch lo vea
+        elementos = root.xpath('//svg:rect | //svg:path | //svg:circle', namespaces=ns)
+        
+        for el in elementos:
+            # Si el elemento tiene un fill (como tu #F81E1E), lo mantenemos
+            # pero nos aseguramos de que Inkstitch sepa que debe RELLENARLO
             el.set('{http://inkstitch.org/namespace}allow_auto_fill', 'true')
-            el.set('{http://inkstitch.org/namespace}fill_spacing_mm', '1.0')
+            el.set('{http://inkstitch.org/namespace}fill_spacing_mm', '0.4')
+            
+            # Forzamos que el objeto sea considerado un "área de relleno"
+            # eliminando cualquier stroke que pueda confundir si no es necesario
+            if not el.get('stroke'):
+                el.set('stroke', 'none')
+
         tree.write(file_path)
-    except: pass
+        return True
+    except Exception as e:
+        print(f"Error preparando SVG: {e}")
+        return False
 
 @app.get("/")
 def health():
