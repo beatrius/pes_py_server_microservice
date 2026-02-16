@@ -1,7 +1,7 @@
 import sys
 from unittest.mock import MagicMock
 
-# --- PARCHE PARA EVITAR ERRORES DE INTERFAZ GRÁFICA ---
+# --- PARCHE PARA ENTORNOS SIN INTERFAZ (RENDER/DOCKER) ---
 mock_wx = MagicMock()
 sys.modules["wx"] = mock_wx
 sys.modules["wx.lib"] = MagicMock()
@@ -9,7 +9,6 @@ sys.modules["wx.lib.apa"] = MagicMock()
 sys.modules["wx.lib.apa.floatspin"] = MagicMock()
 sys.modules["wx.lib.intctrl"] = MagicMock()
 sys.modules["wx.lib.scrolledpanel"] = MagicMock()
-# -----------------------------------------------------
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -18,9 +17,6 @@ import subprocess
 import os
 import uuid
 import lxml.etree as ET
-import math
-from shapely.geometry import LineString
-import re
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -28,19 +24,22 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # Permitimos todo temporalmente para descartar bloqueos
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-def cleanup_files(*files):
-    for f in files:
+def cleanup(in_f, out_f):
+    for f in [in_f, out_f]:
         if os.path.exists(f):
             try: os.remove(f)
             except: pass
 
-def preparar_svg(file_path):
+def procesar_geometria_universal(file_path):
+    """
+    Analiza el SVG y prepara CUALQUIER forma para ser bordada.
+    """
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
@@ -50,35 +49,36 @@ def preparar_svg(file_path):
         }
         ET.register_namespace('inkstitch', ns['inkstitch'])
         
-        # 1. Asegurar dimensiones físicas (Inkstitch ama los milímetros)
-        # 204px a 96dpi son aproximadamente 54mm
-        root.set('width', '204mm')
-        root.set('height', '50mm')
+        # 1. Normalización de unidades: Forzamos que el diseño tenga un tamaño físico real.
+        # Si el SVG no tiene unidades, Inkstitch puede ignorarlo.
+        if 'width' in root.attrib:
+            w = root.get('width').replace('px', '')
+            root.set('width', f"{w}mm")
+        if 'height' in root.attrib:
+            h = root.get('height').replace('px', '')
+            root.set('height', f"{h}mm")
 
-        # 2. Buscar rectángulos y otras formas
-        # Tu SVG usa un <rect>, vamos a asegurarnos de que Inkstitch lo vea
-        elementos = root.xpath('//svg:rect | //svg:path | //svg:circle', namespaces=ns)
+        # 2. Selector Universal de Formas: Captura paths, rects, circles, ellipses y polygons.
+        elementos = root.xpath('//svg:path | //svg:rect | //svg:circle | //svg:ellipse | //svg:polygon', namespaces=ns)
         
         for el in elementos:
-            # Si el elemento tiene un fill (como tu #F81E1E), lo mantenemos
-            # pero nos aseguramos de que Inkstitch sepa que debe RELLENARLO
+            # Forzamos el autocompletado de puntadas (Relleno)
             el.set('{http://inkstitch.org/namespace}allow_auto_fill', 'true')
+            # Densidad estándar (0.4mm es el equilibrio entre calidad y velocidad)
             el.set('{http://inkstitch.org/namespace}fill_spacing_mm', '0.4')
             
-            # Forzamos que el objeto sea considerado un "área de relleno"
-            # eliminando cualquier stroke que pueda confundir si no es necesario
-            if not el.get('stroke'):
-                el.set('stroke', 'none')
+            # Si el elemento no tiene color de relleno, le asignamos uno por defecto (negro)
+            # para asegurar que Inkstitch genere puntadas.
+            style = el.get('style', '')
+            fill = el.get('fill')
+            if (not fill or fill == 'none') and 'fill' not in style:
+                el.set('fill', '#000000')
 
         tree.write(file_path)
         return True
     except Exception as e:
-        print(f"Error preparando SVG: {e}")
+        print(f"Error procesando SVG: {e}")
         return False
-
-@app.get("/")
-def health():
-    return {"status": "ok"}
 
 @app.post("/convert")
 async def convert(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
@@ -87,30 +87,30 @@ async def convert(background_tasks: BackgroundTasks, file: UploadFile = File(...
     out_p = os.path.abspath(f"{session_id}.pes")
     
     try:
-        # 1. Guardar SVG
+        # Guardar archivo recibido
         with open(in_p, "wb") as f:
             f.write(await file.read())
         
-        # 2. Preparar
-        preparar_svg(in_p)
+        # Preparar todas las formas del diseño
+        procesar_geometria_universal(in_p)
         
-        # 3. Convertir
+        # Comando de conversión
         cmd = ["inkstitch", "--extension=output", "--format=pes", f"--output={out_p}", in_p]
         res = subprocess.run(cmd, capture_output=True, text=True)
         
-        if res.returncode != 0 or not os.path.exists(out_p):
-            raise Exception(f"Inkstitch falló: {res.stderr}")
+        if not os.path.exists(out_p):
+            # Error crítico: devolvemos JSON para que el cliente sepa qué pasó
+            return {"error": "Inkstitch no generó puntadas. Revisa la geometría.", "log": res.stderr}
 
-        # 4. RETORNO BINARIO PURO
-        # Programamos el borrado para después de que se complete la descarga
-        background_tasks.add_task(cleanup_files, in_p, out_p)
+        background_tasks.add_task(cleanup, in_p, out_p)
         
+        # Respuesta binaria limpia
         return FileResponse(
             path=out_p,
-            filename="bordado.pes",
-            media_type="application/octet-stream"
+            media_type="application/octet-stream",
+            filename="diseno_bordado.pes"
         )
-    
+        
     except Exception as e:
-        cleanup_files(in_p, out_p)
-        return {"detail": f"Server Error: {str(e)}"}
+        cleanup(in_p, out_p)
+        return {"error": str(e)}
