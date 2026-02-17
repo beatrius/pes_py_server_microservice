@@ -42,20 +42,30 @@ def forzar_geometria_bordado(file_path):
         NS = {'svg': 'http://www.w3.org/2000/svg', 'inkstitch': 'http://inkstitch.org/namespace'}
         ET.register_namespace('inkstitch', NS['inkstitch'])
 
-        # Normalizar tamaño a 100mm para que sea visible
+        # 1. Ajustar el tamaño (Ya lo hacíamos, pero es vital)
         root.set('width', '100mm')
         root.set('height', '100mm')
 
-        # Inyectar atributos a todas las formas
-        for el in root.xpath('//*[local-name()="rect" or local-name()="path" or local-name()="circle" or local-name()="ellipse"]'):
+        # 2. SELECCIÓN AGRESIVA: Buscamos todos los elementos que REPRESENTAN formas, sin importar si están dentro de un <g> o no.
+        elementos = root.xpath('//*[local-name()="path" or local-name()="rect" or local-name()="circle" or local-name()="ellipse"]', namespaces=NS)
+        
+        for el in elementos:
+            # Forzamos los parámetros de bordado en cada pieza individual
             el.set('{http://inkstitch.org/namespace}allow_auto_fill', 'true')
             el.set('{http://inkstitch.org/namespace}fill_spacing_mm', '0.4')
+            
+            # Si el elemento no tiene color propio (porque lo heredaba del grupo),
+            # le asignamos el color verde que vimos en tu SVG para que no sea invisible.
             if not el.get('fill') or el.get('fill') == 'none':
-                el.set('fill', '#000000')
+                # Buscamos si el padre tiene un color
+                padre = el.getparent()
+                color_padre = padre.get('fill') if padre is not None else None
+                el.set('fill', color_padre if color_padre else '#12925e')
 
         tree.write(file_path)
         return True
-    except:
+    except Exception as e:
+        print(f"Error inyectando: {e}")
         return False
 
 @app.post("/convert")
