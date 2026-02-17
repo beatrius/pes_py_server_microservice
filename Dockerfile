@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# 1. Instalar dependencias esenciales
+# 1. Dependencias de sistema necesarias para Inkscape y lxml
 RUN apt-get update && apt-get install -y \
     inkscape \
     curl \
@@ -8,30 +8,32 @@ RUN apt-get update && apt-get install -y \
     libnss3 \
     libgomp1 \
     libgl1 \
-    libxml2-dev \
-    libxslt-dev \
+    libxml2 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 2. Instalación limpia de Inkstitch en /opt
+# 2. Instalación de Inkstitch - MÉTODO ROBUSTO
+# Descargamos, creamos carpeta, extraemos ignorando la carpeta raíz del zip y damos permisos
 RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-3.0.1-linux.tar.xz" -o inkstitch.tar.xz \
     && mkdir -p /opt/inkstitch \
     && tar -xJf inkstitch.tar.xz -C /opt/inkstitch --strip-components=1 \
-    && chmod -R 755 /opt/inkstitch \
-    && ln -sf /opt/inkstitch/bin/inkstitch /usr/local/bin/inkstitch \
+    && chmod -R +x /opt/inkstitch/bin/inkstitch \
     && rm inkstitch.tar.xz
 
-# 3. Dependencias de Python
+# 3. Crear un enlace simbólico REAL en la ruta de sistema
+RUN ln -s /opt/inkstitch/bin/inkstitch /usr/bin/inkstitch
+
+# 4. Configurar Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
-# 4. Variables de entorno (Cruciales para que el sistema vea el binario)
+# 5. Variables de entorno - Aquí está el secreto para Render
 ENV PATH="/opt/inkstitch/bin:${PATH}"
-ENV QT_QPA_PLATFORM=offscreen
-ENV INKSCAPE_PROFILE_DIR=/tmp
 ENV HOME=/tmp
+ENV INKSCAPE_PROFILE_DIR=/tmp
+ENV QT_QPA_PLATFORM=offscreen
 
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+# Render usa la variable $PORT
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT}"]
