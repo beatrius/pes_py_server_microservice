@@ -93,3 +93,19 @@ async def convert(background_tasks: BackgroundTasks, file: UploadFile = File(...
     except Exception as e:
         cleanup([svg_path, pes_path])
         return {"error": str(e)}
+    
+@app.get("/health")
+def health_check():
+    try:
+        # Verifica si Inkscape responde
+        inkscape = subprocess.run(["inkscape", "--version"], capture_output=True, text=True)
+        # Verifica si Inkstitch responde
+        inkstitch = subprocess.run(["inkstitch", "--version"], capture_output=True, text=True)
+        
+        return {
+            "status": "ready",
+            "inkscape": inkscape.stdout.strip() if inkscape.returncode == 0 else "Error",
+            "inkstitch": inkstitch.stdout.strip() if inkstitch.returncode == 0 else "Error"
+        }
+    except Exception as e:
+        return {"status": "error", "details": str(e)}
