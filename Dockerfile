@@ -18,9 +18,7 @@ WORKDIR /app
 RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-3.0.1-linux.tar.xz" -o inkstitch.tar.xz \
     && mkdir -p /usr/local/bin/inkstitch_cli \
     && tar -xJf inkstitch.tar.xz -C /usr/local/bin/inkstitch_cli --strip-components=1 \
-    # Damos permisos de ejecución a todo el paquete extraído
     && chmod -R +x /usr/local/bin/inkstitch_cli \
-    # Creamos el enlace simbólico para que el comando 'inkstitch' sea global
     && ln -sf /usr/local/bin/inkstitch_cli/bin/inkstitch /usr/local/bin/inkstitch \
     && rm inkstitch.tar.xz
 
