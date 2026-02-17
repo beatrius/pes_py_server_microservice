@@ -134,15 +134,22 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
 @app.get("/health")
 async def health_check():
     import subprocess
+    import os
+    
+    # Comprobar si el archivo físico existe
+    exists = os.path.exists("/opt/inkstitch/bin/inkstitch")
+    
     try:
-        # Intentamos ejecutarlo directamente desde la ruta donde lo instalamos
-        st = subprocess.run(["/opt/inkstitch/bin/inkstitch", "--version"], capture_output=True, text=True)
+        # Intentamos ejecutarlo con el PATH completo
+        st = subprocess.run(["/usr/local/bin/inkstitch", "--version"], capture_output=True, text=True)
         ink = subprocess.run(["inkscape", "--version"], capture_output=True, text=True)
         
         return {
-            "status": "ready",
+            "status": "ready" if st.returncode == 0 else "degraded",
+            "file_exists": exists,
             "inkscape": ink.stdout.strip() if ink.returncode == 0 else "Error",
-            "inkstitch": st.stdout.strip() if st.returncode == 0 else "Not found in path"
+            "inkstitch": st.stdout.strip() if st.returncode == 0 else f"Error: {st.stderr}",
+            "path": os.environ.get("PATH")
         }
     except Exception as e:
-        return {"status": "error", "detail": str(e)}
+        return {"status": "error", "exists": exists, "detail": str(e)}
