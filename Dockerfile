@@ -12,13 +12,14 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 2. Instalar Inkstitch CLI (URL Verificada v3.0.1)
-RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-en_US.tar.xz" -o inkstitch.tar.xz \
+# 2. Instalar Inkstitch CLI (Método de Producción Estable)
+# Descargamos el paquete ZIP de la versión 3.0.1 que es la más probada
+RUN curl -L "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-en_US.zip" -o inkstitch.zip \
     && mkdir -p /usr/local/bin/inkstitch_cli \
-    && tar -xJf inkstitch.tar.xz -C /usr/local/bin/inkstitch_cli \
-    && chmod +x /usr/local/bin/inkstitch_cli/inkstitch \
-    && ln -s /usr/local/bin/inkstitch_cli/inkstitch /usr/local/bin/inkstitch \
-    && rm inkstitch.tar.xz
+    && unzip inkstitch.zip -d /usr/local/bin/inkstitch_cli \
+    && find /usr/local/bin/inkstitch_cli -name "inkstitch" -exec chmod +x {} \; \
+    && find /usr/local/bin/inkstitch_cli -name "inkstitch" -exec ln -s {} /usr/local/bin/inkstitch \; \
+    && rm inkstitch.zip
 
 # 3. Instalar dependencias de Python
 COPY requirements.txt .
