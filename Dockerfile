@@ -12,10 +12,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 2. Instalar Inkstitch CLI (Búsqueda dinámica del asset)
-RUN URL=$(curl -s https://api.github.com/repos/inkstitch/inkstitch/releases/tags/v3.0.1 | grep "browser_download_url" | grep "linux-en_US.zip" | cut -d '"' -f 4) \
-    && echo "Descargando desde: $URL" \
-    && curl -L -f "$URL" -o inkstitch.zip \
+# 2. Instalar Inkstitch CLI (URL Directa verificada v3.0.1)
+RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-en_US.zip" -o inkstitch.zip \
     && mkdir -p /usr/local/bin/inkstitch_cli \
     && unzip inkstitch.zip -d /usr/local/bin/inkstitch_cli \
     && find /usr/local/bin/inkstitch_cli -name "inkstitch" -exec chmod +x {} \; \
