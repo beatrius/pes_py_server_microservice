@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 2. Instalar Inkstitch CLI (Versión ejecutable para Linux v3.1.0)
-RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.1.0/inkstitch-v3.1.0-linux-en_US.tar.xz" -o inkstitch.tar.xz \
+# 2. Instalar Inkstitch CLI (Versión ejecutable para Linux v3.0.1 - Formato Tarball)
+RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-en_US.tar.xz" -o inkstitch.tar.xz \
     && mkdir -p /usr/local/bin/inkstitch_cli \
     && tar -xJf inkstitch.tar.xz -C /usr/local/bin/inkstitch_cli \
     && chmod +x /usr/local/bin/inkstitch_cli/inkstitch \
