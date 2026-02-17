@@ -162,11 +162,21 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
 async def health_check():
     """Verifica si Inkscape e InkStitch están disponibles en el sistema."""
     try:
+        # Ejecutar comandos de versión
         ink = await asyncio.create_subprocess_exec("inkscape", "--version", stdout=asyncio.subprocess.PIPE)
         st = await asyncio.create_subprocess_exec("inkstitch", "--version", stdout=asyncio.subprocess.PIPE)
+        
         out_i, _ = await ink.communicate()
         out_s, _ = await st.communicate()
+        
         return {
             "status": "ready",
-            "inkscape": out
+            "inkscape": out_i.decode().strip() if out_i else "Not found",
+            "inkstitch": out_s.decode().strip() if out_s else "Not found"
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "error",
+            "detail": str(e)
         }
