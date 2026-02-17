@@ -133,15 +133,16 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
 
 @app.get("/health")
 async def health_check():
+    import subprocess
     try:
-        ink = await asyncio.create_subprocess_exec("inkscape", "--version", stdout=asyncio.subprocess.PIPE)
-        st = await asyncio.create_subprocess_exec("inkstitch", "--version", stdout=asyncio.subprocess.PIPE)
-        out_i, _ = await ink.communicate()
-        out_s, _ = await st.communicate()
+        # Intentamos ejecutarlo directamente desde la ruta donde lo instalamos
+        st = subprocess.run(["/opt/inkstitch/bin/inkstitch", "--version"], capture_output=True, text=True)
+        ink = subprocess.run(["inkscape", "--version"], capture_output=True, text=True)
+        
         return {
             "status": "ready",
-            "inkscape": out_i.decode().strip() if out_i else "Not found",
-            "inkstitch": out_s.decode().strip() if out_s else "Not found"
+            "inkscape": ink.stdout.strip() if ink.returncode == 0 else "Error",
+            "inkstitch": st.stdout.strip() if st.returncode == 0 else "Not found in path"
         }
     except Exception as e:
         return {"status": "error", "detail": str(e)}
