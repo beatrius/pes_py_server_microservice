@@ -1,16 +1,13 @@
 import sys
 from unittest.mock import MagicMock
 
-# --- PARCHE PARA ENTORNOS SIN INTERFAZ (RENDER/DOCKER) ---
+# --- PARCHE DE INTERFAZ (WX) ---
 mock_wx = MagicMock()
 sys.modules["wx"] = mock_wx
-sys.modules["wx.lib"] = MagicMock()
-sys.modules["wx.lib.apa"] = MagicMock()
-sys.modules["wx.lib.apa.floatspin"] = MagicMock()
-sys.modules["wx.lib.intctrl"] = MagicMock()
-sys.modules["wx.lib.scrolledpanel"] = MagicMock()
+for mod in ["wx.lib", "wx.lib.apa", "wx.lib.apa.floatspin", "wx.lib.intctrl", "wx.lib.scrolledpanel"]:
+    sys.modules[mod] = MagicMock()
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, BackgroundTasks
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 import subprocess
@@ -30,87 +27,73 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def cleanup(in_f, out_f):
-    for f in [in_f, out_f]:
-        if os.path.exists(f):
-            try: os.remove(f)
+def cleanup(paths):
+    for p in paths:
+        if os.path.exists(p):
+            try: os.remove(p)
             except: pass
 
-def procesar_geometria_universal(file_path):
-    """
-    Analiza el SVG y prepara CUALQUIER forma para ser bordada.
-    """
+def inyectar_instrucciones_bordado(file_path):
+    """Asegura que cualquier forma tenga parámetros de bordado válidos"""
     try:
         tree = ET.parse(file_path)
         root = tree.getroot()
-        ns = {
-            'svg': 'http://www.w3.org/2000/svg',
-            'inkstitch': 'http://inkstitch.org/namespace'
-        }
+        ns = {'svg': 'http://www.w3.org/2000/svg', 'inkstitch': 'http://inkstitch.org/namespace'}
         ET.register_namespace('inkstitch', ns['inkstitch'])
         
-        # 1. Normalización de unidades: Forzamos que el diseño tenga un tamaño físico real.
-        # Si el SVG no tiene unidades, Inkstitch puede ignorarlo.
-        if 'width' in root.attrib:
-            w = root.get('width').replace('px', '')
-            root.set('width', f"{w}mm")
-        if 'height' in root.attrib:
-            h = root.get('height').replace('px', '')
-            root.set('height', f"{h}mm")
+        # Escalar a dimensiones físicas reales (mm)
+        root.set('width', '150mm')
+        root.set('height', '150mm')
 
-        # 2. Selector Universal de Formas: Captura paths, rects, circles, ellipses y polygons.
-        elementos = root.xpath('//svg:path | //svg:rect | //svg:circle | //svg:ellipse | //svg:polygon', namespaces=ns)
-        
-        for el in elementos:
-            # Forzamos el autocompletado de puntadas (Relleno)
+        # Buscar todas las formas posibles
+        for el in root.xpath('//*[local-name()="path" or local-name()="rect" or local-name()="circle" or local-name()="ellipse" or local-name()="polygon"]'):
+            # Forzar Relleno Tatami
             el.set('{http://inkstitch.org/namespace}allow_auto_fill', 'true')
-            # Densidad estándar (0.4mm es el equilibrio entre calidad y velocidad)
             el.set('{http://inkstitch.org/namespace}fill_spacing_mm', '0.4')
-            
-            # Si el elemento no tiene color de relleno, le asignamos uno por defecto (negro)
-            # para asegurar que Inkstitch genere puntadas.
-            style = el.get('style', '')
-            fill = el.get('fill')
-            if (not fill or fill == 'none') and 'fill' not in style:
+            # Garantizar que el color no sea 'none'
+            if not el.get('fill') or el.get('fill') == 'none':
                 el.set('fill', '#000000')
-
+        
         tree.write(file_path)
-        return True
-    except Exception as e:
-        print(f"Error procesando SVG: {e}")
-        return False
+    except:
+        pass
 
 @app.post("/convert")
 async def convert(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
-    session_id = str(uuid.uuid4())
-    in_p = os.path.abspath(f"{session_id}.svg")
-    out_p = os.path.abspath(f"{session_id}.pes")
+    s_id = str(uuid.uuid4())
+    in_p = os.path.abspath(f"{s_id}.svg")
+    out_p = os.path.abspath(f"{s_id}.pes")
     
     try:
-        # Guardar archivo recibido
+        # 1. Guardar el archivo recibido
+        data = await file.read()
         with open(in_p, "wb") as f:
-            f.write(await file.read())
+            f.write(data)
         
-        # Preparar todas las formas del diseño
-        procesar_geometria_universal(in_p)
+        # 2. Preparar geometría universal
+        inyectar_instrucciones_bordado(in_p)
         
-        # Comando de conversión
-        cmd = ["inkstitch", "--extension=output", "--format=pes", f"--output={out_p}", in_p]
-        res = subprocess.run(cmd, capture_output=True, text=True)
+        # 3. Conversión mediante Inkstitch
+        # Usamos stdout/stderr como PIPE para no interferir con la respuesta principal
+        subprocess.run(
+            ["inkstitch", "--extension=output", "--format=pes", f"--output={out_p}", in_p],
+            capture_output=True
+        )
         
         if not os.path.exists(out_p):
-            # Error crítico: devolvemos JSON para que el cliente sepa qué pasó
-            return {"error": "Inkstitch no generó puntadas. Revisa la geometría.", "log": res.stderr}
+            return {"error": "No se pudo generar el archivo de bordado"}
 
-        background_tasks.add_task(cleanup, in_p, out_p)
+        # 4. Limpieza posterior a la descarga
+        background_tasks.add_task(cleanup, [in_p, out_p])
         
-        # Respuesta binaria limpia
+        # 5. RETORNO DIRECTO DE ARCHIVO (Sin procesar como texto)
         return FileResponse(
             path=out_p,
             media_type="application/octet-stream",
-            filename="diseno_bordado.pes"
+            filename="profesional_embroidery.pes"
         )
         
     except Exception as e:
-        cleanup(in_p, out_p)
-        return {"error": str(e)}
+        cleanup([in_p, out_p])
+        # Solo en caso de error crítico enviamos un JSON plano
+        return {"error": "Ocurrió un fallo en el servidor durante la conversión"}
