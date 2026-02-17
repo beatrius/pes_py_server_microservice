@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
-# 1. Instalar dependencias del sistema, Inkscape y librerías matemáticas
+# 1. Instalar dependencias del sistema y librerías gráficas/matemáticas
 RUN apt-get update && apt-get install -y \
     inkscape \
     curl \
-    unzip \
+    xz-utils \
     libnss3 \
     libgomp1 \
     libgl1 \
@@ -12,8 +12,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 2. Instalar Inkstitch CLI (Versión ejecutable para Linux v3.0.1 - Formato Tarball)
-RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-en_US.tar.xz" -o inkstitch.tar.xz \
+# 2. Instalar Inkstitch CLI (URL corregida v3.0.1)
+RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux.tar.xz" -o inkstitch.tar.xz \
     && mkdir -p /usr/local/bin/inkstitch_cli \
     && tar -xJf inkstitch.tar.xz -C /usr/local/bin/inkstitch_cli \
     && chmod +x /usr/local/bin/inkstitch_cli/inkstitch \
@@ -26,7 +26,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Variables de entorno para ejecución sin pantalla
 ENV QT_QPA_PLATFORM=offscreen
 ENV INKSCAPE_PROFILE_DIR=/tmp
 
