@@ -1,10 +1,10 @@
 FROM python:3.11-slim
 
-# 1. Instalar dependencias del sistema y librerías gráficas/matemáticas
+# 1. Instalar dependencias del sistema (Añadido unzip)
 RUN apt-get update && apt-get install -y \
     inkscape \
     curl \
-    xz-utils \
+    unzip \
     libnss3 \
     libgomp1 \
     libgl1 \
@@ -12,9 +12,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 2. Instalar Inkstitch CLI (Método de Producción Estable)
-# Descargamos el paquete ZIP de la versión 3.0.1 que es la más probada
-RUN curl -L "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch-v3.0.1-linux-en_US.zip" -o inkstitch.zip \
+# 2. Instalar Inkstitch CLI (URL Verificada para ZIP)
+# Nota: Usamos guiones bajos v3_0_1 que es como GitHub nombra este asset
+RUN curl -L -f "https://github.com/inkstitch/inkstitch/releases/download/v3.0.1/inkstitch_v3.0.1_linux_en_US.zip" -o inkstitch.zip \
     && mkdir -p /usr/local/bin/inkstitch_cli \
     && unzip inkstitch.zip -d /usr/local/bin/inkstitch_cli \
     && find /usr/local/bin/inkstitch_cli -name "inkstitch" -exec chmod +x {} \; \
