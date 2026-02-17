@@ -169,3 +169,4 @@ async def health_check():
         return {
             "status": "ready",
             "inkscape": out
+        }
