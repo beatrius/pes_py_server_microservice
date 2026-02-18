@@ -51,39 +51,45 @@ def cleanup(files):
                 logger.error(f"Error cleanup {f}: {e}")
 
 async def preparar_svg_async(path):
-    """Limpia el SVG y asegura que tenga los atributos de bordado."""
+    """Limpia el SVG, inyecta namespaces y genera IDs obligatorios para Inkstitch."""
     try:
         parser = ET.XMLParser(resolve_entities=False, no_network=True)
         tree = ET.parse(path, parser=parser)
         root = tree.getroot()
         
-        # Namespaces
-        namespaces = {
+        # Namespaces necesarios
+        NS_MAP = {
             'svg': 'http://www.w3.org/2000/svg',
             'inkstitch': 'http://inkstitch.org/namespace'
         }
         
-        # Forzar tamaño si no viene en mm
+        # Normalizar dimensiones para evitar errores de bastidor
         root.set('width', '100mm')
         root.set('height', '100mm')
+        if not root.get('viewBox'):
+            root.set('viewBox', '0 0 200 200')
 
         # Procesar trayectos
-        for el in root.xpath('//svg:path', namespaces=namespaces):
-            # Si tiene relleno y no es transparente, activar auto-fill
+        for el in root.xpath('//svg:path', namespaces=NS_MAP):
+            # 1. Generar ID si no existe (Vital para Inkstitch v3)
+            if not el.get('id'):
+                el.set('id', f'stitch_{uuid.uuid4().hex[:6]}')
+            
+            # 2. Configurar relleno automático
             fill = el.get('fill', '').lower()
-            if fill and fill != 'none' and fill != 'transparent':
+            if fill and fill not in ['none', 'transparent', '']:
                 el.set(f'{INK_NS}allow_auto_fill', 'true')
                 el.set(f'{INK_NS}fill_spacing_mm', '0.4')
             
-            # Si tiene borde, asegurar parámetros de puntada de trazo
+            # 3. Configurar trazo si existe
             stroke = el.get('stroke', '').lower()
-            if stroke and stroke != 'none':
+            if stroke and stroke not in ['none', 'transparent', '']:
                 el.set(f'{INK_NS}stitch_type', 'stroke')
 
         tree.write(path)
         return True
     except Exception as e:
-        logger.error(f"Error parseando XML: {e}")
+        logger.error(f"Error preparando XML: {e}")
         return False
 
 @app.post("/convert")
@@ -101,42 +107,38 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
         with open(svg_path, "wb") as f:
             f.write(content)
         
-        # 1. Limpieza y preparación de atributos
         if not await preparar_svg_async(svg_path):
             raise ValueError("Error preparando metadatos del SVG")
         
-        # 2. Conversión mediante Inkscape
-        # Ejecutamos select-all y convertimos objetos a trazos por si acaso,
-        # luego llamamos a la acción de bordado de inkstitch explícitamente.
         env = os.environ.copy()
         
-        # COMANDO MAESTRO: Seleccionar todo -> Convertir a trazo -> Generar puntadas -> Exportar
-        actions = (
-            "select-all:all;"
-            "object-to-path;"
-            "org.inkstitch.stitch;"
-            f"export-filename={pes_path};"
-            "export-do"
-        )
-        
+        # --- PLAN A: Exportación Directa ---
+        logger.info(f"Intentando Plan A para {job_id}")
         proc = await asyncio.create_subprocess_exec(
             "inkscape", svg_path,
-            f"--actions={actions}",
+            "--export-type=pes",
+            f"--export-filename={pes_path}",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env
         )
-        
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=80.0)
-            if proc.returncode != 0:
-                err = stderr.decode()
-                logger.error(f"Inkscape Error: {err}")
-                raise ValueError(f"Inkscape falló: {err}")
-        except asyncio.TimeoutError:
-            if proc: proc.kill()
-            raise HTTPException(status_code=504, detail="Tiempo de espera agotado")
+        await asyncio.wait_for(proc.communicate(), timeout=40.0)
 
+        # --- PLAN B: Si el Plan A falló o generó archivo vacío ---
+        if not os.path.exists(pes_path) or os.path.getsize(pes_path) == 0:
+            logger.info(f"Plan B: Forzando motor de puntadas para {job_id}")
+            actions = "select-all:all;object-to-path;org.inkstitch.stitch;export-do"
+            proc = await asyncio.create_subprocess_exec(
+                "inkscape", svg_path,
+                f"--actions={actions}",
+                f"--export-filename={pes_path}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env
+            )
+            await asyncio.wait_for(proc.communicate(), timeout=60.0)
+
+        # Verificación Final
         if os.path.exists(pes_path) and os.path.getsize(pes_path) > 0:
             background_tasks.add_task(cleanup, [svg_path, pes_path])
             return FileResponse(
@@ -145,10 +147,10 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
                 filename=f"{file.filename.rsplit('.', 1)[0]}.pes"
             )
         
-        raise ValueError("Inkstitch no generó ninguna puntada (archivo vacío)")
+        raise ValueError("Inkstitch no pudo generar puntadas. Revisa que el diseño tenga áreas de color sólido.")
 
     except Exception as e:
-        logger.error(f"Error en conversión: {e}")
+        logger.error(f"Error crítico: {e}")
         cleanup([svg_path, pes_path])
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -157,7 +159,6 @@ async def health_check():
     try:
         env = os.environ.copy()
         ink = subprocess.run(["inkscape", "--version"], capture_output=True, text=True, env=env)
-        # Listar acciones para verificar que org.inkstitch está cargado
         actions = subprocess.run(["inkscape", "--action-list"], capture_output=True, text=True, env=env)
         has_inkstitch = "org.inkstitch" in actions.stdout
         
