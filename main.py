@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import logging
 import lxml.etree as ET
+import subprocess
 from fastapi import FastAPI, UploadFile, File, BackgroundTasks, HTTPException, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,9 +12,13 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 # --- CONFIGURACIÓN PARA RENDER ---
+# Forzamos HOME a /tmp para evitar errores de permisos en Render
 os.environ["HOME"] = "/tmp"
 os.environ["INKSCAPE_PROFILE_DIR"] = "/tmp"
-os.environ["PATH"] = "/usr/local/bin/inkstitch_cli/bin:" + os.environ.get("PATH", "")
+# Aseguramos que el PATH incluya el binario de inkstitch correctamente
+os.environ["PATH"] = "/usr/share/inkscape/extensions/inkstitch/bin:" + os.environ.get("PATH", "")
+# El DISPLAY se configura en el Dockerfile, pero lo aseguramos aquí también
+os.environ["DISPLAY"] = os.environ.get("DISPLAY", ":99")
 
 # 1. Configuración de Logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -50,11 +55,15 @@ def cleanup(files):
 async def preparar_svg_async(path):
     proc = None
     try:
+        # Pasamos el entorno actual para que Inkscape tenga acceso al DISPLAY
+        env = os.environ.copy()
+        # Pre-procesamos el SVG: convertir objetos a trazos y aplicar namespaces de Inkstitch
         proc = await asyncio.create_subprocess_exec(
             "inkscape", path,
             "--actions=select-all:all;object-to-path;export-filename=" + path + ";export-do",
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=env
         )
         try:
             await asyncio.wait_for(proc.communicate(), timeout=25.0)
@@ -99,27 +108,33 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
     try:
         with open(svg_path, "wb") as f:
             f.write(content)
+        
+        # 1. Preparar geometría
         if not await preparar_svg_async(svg_path):
             raise ValueError("Error en geometría")
         
-        # INKSTITCH - LÍNEAS VERIFICADAS
+        # 2. Exportar a PES usando Inkscape CLI
+        # Inkscape detecta automáticamente la extensión .pes y usa el plugin de Inkstitch
+        env = os.environ.copy()
         proc = await asyncio.create_subprocess_exec(
-            "inkstitch", svg_path,
-            f"--output={pes_path}",
+            "inkscape", svg_path,
+            f"--actions=export-filename={pes_path};export-do",
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            env=env
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=45.0)
             if proc.returncode != 0:
-                raise ValueError("Inkstitch falló")
+                logger.error(f"Export Error: {stderr.decode()}")
+                raise ValueError("La exportación a PES falló")
         except asyncio.TimeoutError:
             raise HTTPException(status_code=504, detail="Timeout")
 
         if os.path.exists(pes_path) and os.path.getsize(pes_path) > 0:
             background_tasks.add_task(cleanup, [svg_path, pes_path])
             return FileResponse(pes_path, media_type="application/octet-stream", filename=f"{file.filename.rsplit('.', 1)[0]}.pes")
-        raise ValueError("No se generó el archivo")
+        raise ValueError("No se generó el archivo PES")
     except Exception as e:
         logger.error(f"Error: {e}")
         cleanup([svg_path, pes_path])
@@ -133,23 +148,25 @@ async def convert(request: Request, background_tasks: BackgroundTasks, file: Upl
 
 @app.get("/health")
 async def health_check():
-    import subprocess
-    import os
-    
-    # Comprobar si el archivo físico existe
-    exists = os.path.exists("/opt/inkstitch/bin/inkstitch")
+    # Comprobar si el binario físico existe
+    exists = os.path.exists("/usr/share/inkscape/extensions/inkstitch/bin/inkstitch")
     
     try:
-        # Intentamos ejecutarlo con el PATH completo
-        st = subprocess.run(["/usr/local/bin/inkstitch", "--version"], capture_output=True, text=True)
-        ink = subprocess.run(["inkscape", "--version"], capture_output=True, text=True)
+        env = os.environ.copy()
+        # Probamos la versión de Inkscape
+        ink = subprocess.run(["inkscape", "--version"], capture_output=True, text=True, env=env)
+        
+        # Verificamos si Inkstitch está disponible como acción en Inkscape
+        # Esto confirma que la extensión está correctamente instalada
+        actions = subprocess.run(["inkscape", "--action-list"], capture_output=True, text=True, env=env)
+        has_inkstitch = "org.inkstitch" in actions.stdout
         
         return {
-            "status": "ready" if st.returncode == 0 else "degraded",
-            "file_exists": exists,
+            "status": "ready" if (ink.returncode == 0 and has_inkstitch) else "degraded",
             "inkscape": ink.stdout.strip() if ink.returncode == 0 else "Error",
-            "inkstitch": st.stdout.strip() if st.returncode == 0 else f"Error: {st.stderr}",
-            "path": os.environ.get("PATH")
+            "inkstitch_extension": "Installed" if has_inkstitch else "Not Found",
+            "display": os.environ.get("DISPLAY"),
+            "home": os.environ.get("HOME")
         }
     except Exception as e:
         return {"status": "error", "exists": exists, "detail": str(e)}
